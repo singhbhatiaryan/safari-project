@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Chrome MV3 companion for the Safari Start Page: quick-save popup, shortcuts, new-tab override.",
   "scripts": {
-    "dev": "vite watch",
+    "dev": "vite build --watch --mode development",
     "build": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
