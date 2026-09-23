@@ -1,0 +1,464 @@
+@import 'tailwindcss';
+
+/*
+ * Popup styling — a small macOS sheet: translucent vibrancy, SF-ish type, one
+ * accent button. Kept separate from the start page stylesheet so the popup stays
+ * tiny and never depends on the site bundle.
+ */
+:root {
+  --accent: #0a84ff;
+  --text: rgba(0, 0, 0, 0.92);
+  --text-2: rgba(60, 60, 67, 0.62);
+  --sheet: rgba(246, 246, 248, 0.86);
+  --hairline: rgba(0, 0, 0, 0.1);
+  --field: rgba(255, 255, 255, 0.75);
+  --row: rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: rgba(255, 255, 255, 0.94);
+    --text-2: rgba(235, 235, 245, 0.6);
+    --sheet: rgba(32, 32, 36, 0.9);
+    --hairline: rgba(255, 255, 255, 0.12);
+    --field: rgba(0, 0, 0, 0.32);
+    --row: rgba(255, 255, 255, 0.06);
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.popup-body {
+  margin: 0;
+  width: 348px;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--sheet);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+}
+
+.sheet {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.header img {
+  width: 15px;
+  height: 15px;
+}
+
+.preview {
+  display: flex;
+  gap: 11px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--row);
+  border: 0.5px solid var(--hairline);
+}
+
+.tile {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.65);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(255, 255, 255, 0.4) inset;
+  border-radius: 26%;
+  overflow: hidden;
+}
+
+.tile img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.preview-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.title-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  padding: 1px 2px;
+  border-radius: 5px;
+  outline: none;
+  text-overflow: ellipsis;
+}
+
+.title-input:hover,
+.title-input:focus {
+  background: var(--field);
+}
+
+.url {
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 2px;
+}
+
+.label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 4px;
+  display: block;
+}
+
+select,
+.field {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--field);
+  border: 0.5px solid var(--hairline);
+  border-radius: 8px;
+  padding: 6px 8px;
+  outline: none;
+}
+
+select:focus,
+.field:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(120, 120, 128, 0.32);
+  cursor: pointer;
+  flex: none;
+}
+
+.switch[aria-checked='true'] {
+  background: #34c759;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.switch[aria-checked='true']::after {
+  transform: translateX(14px);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+button.btn {
+  font: inherit;
+  font-weight: 500;
+  padding: 6px 13px;
+  border-radius: 8px;
+  border: 0.5px solid var(--hairline);
+  background: var(--field);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+button.btn:hover {
+  filter: brightness(1.06);
+}
+
+button.btn:active {
+  transform: scale(0.97);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  padding-inline: 8px;
+}
+
+.hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--row);
+  border: 0.5px solid var(--hairline);
+}
+
+.saved {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 4px 4px;
+  text-align: center;
+}
+
+.saved .check {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #34c759;
+  color: #fff;
+  font-size: 22px;
+  box-shadow: 0 6px 18px rgba(52, 199, 89, 0.4);
+}
+
+.saved h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.folder-option {
+  white-space: pre;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+/* ============================================================================
+   Popup polish: combobox, duplicate notice, notice card, footer
+   ========================================================================= */
+.field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.combo {
+  position: relative;
+}
+
+.combo-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--field);
+  border: 0.5px solid var(--hairline);
+  border-radius: 9px;
+  padding: 7px 9px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.combo-trigger:hover {
+  filter: brightness(1.04);
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combo-list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 236px;
+  overflow-y: auto;
+  padding: 5px;
+  border-radius: 11px;
+  background: var(--sheet);
+  border: 0.5px solid var(--hairline);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(26px) saturate(190%);
+  -webkit-backdrop-filter: blur(26px) saturate(190%);
+}
+
+.combo-search {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  border: 0.5px solid var(--hairline);
+  background: var(--field);
+  color: var(--text);
+  outline: none;
+}
+
+.combo-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.combo-option:hover,
+.combo-option[aria-selected='true'] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.combo-option:hover .hint,
+.combo-option[aria-selected='true'] .hint {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.duplicate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #ff9f0a 16%, transparent);
+  border: 0.5px solid color-mix(in srgb, #ff9f0a 34%, transparent);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.duplicate-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.mini {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 7px;
+  border: 0.5px solid var(--hairline);
+  background: var(--field);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mini:hover {
+  filter: brightness(1.06);
+}
+
+.notice {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--row);
+  border: 0.5px solid var(--hairline);
+}
+
+.notice strong {
+  font-size: 12.5px;
+}
+
+.notice p {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.notice code {
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: var(--field);
+}
+
+.hint.error {
+  color: #ff453a;
+  margin: 0;
+}
+
+.footer-hint {
+  margin: 0;
+  text-align: center;
+  line-height: 1.7;
+}
+
+.actions .btn.primary {
+  min-width: 116px;
+}
