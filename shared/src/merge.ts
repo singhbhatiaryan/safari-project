@@ -4,6 +4,7 @@
  * exact same millisecond still converge on the same result.
  */
 import { Item, STORE_VERSION, StoreState, TOMBSTONE_TTL_MS } from './types';
+import { mergeStats } from './store';
 
 export interface MergeResult {
   state: StoreState;
@@ -33,6 +34,14 @@ export function mergeStates(local: StoreState, remote: StoreState): MergeResult 
     .filter((i) => !(i.deletedAt !== null && i.deletedAt < cutoff))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
+  // Visit stats are commutative (max), so they can never conflict and never lose a
+  // count — including when the same page was opened in two browsers.
+  const stats: StoreState['stats'] = {};
+  for (const id of new Set([...Object.keys(local.stats ?? {}), ...Object.keys(remote.stats ?? {})])) {
+    const merged = mergeStats(local.stats?.[id], remote.stats?.[id]);
+    if (merged.c > 0 || merged.t > 0) stats[id] = merged;
+  }
+
   // Settings are merged as a document; the newest editor wins. On an exact tie we
   // take the incoming document: the local side already has its own copy, so the
   // remote one is strictly new information. (Two edits in the same millisecond are
@@ -51,6 +60,7 @@ export function mergeStates(local: StoreState, remote: StoreState): MergeResult 
   const state: StoreState = {
     version: STORE_VERSION,
     items,
+    stats,
     settings,
     settingsUpdatedAt: Math.max(local.settingsUpdatedAt, remote.settingsUpdatedAt),
     updatedAt: Math.max(local.updatedAt, remote.updatedAt),
@@ -74,5 +84,6 @@ export function fingerprint(state: StoreState): string {
   return JSON.stringify({
     i: [...state.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
     s: state.settings,
+    v: state.stats ?? {},
   });
 }

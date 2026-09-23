@@ -44,6 +44,20 @@ export interface Item {
   deletedAt: number | null;
 }
 
+/**
+ * Visit statistics used by the "Frequently Visited" section.
+ *
+ * Kept outside `Item` on purpose: clicks change constantly, and stamping
+ * `updatedAt` on every open would make a click win a merge against a real edit.
+ * Stats merge as max(clicks) / max(timestamp) instead, so they cannot conflict.
+ */
+export interface ItemStats {
+  /** number of times opened from the start page */
+  c: number;
+  /** last time it was opened */
+  t: number;
+}
+
 export interface CustomWallpaper {
   id: string;
   name: string;
@@ -55,6 +69,8 @@ export interface CustomWallpaper {
 
 export interface Settings {
   layout: LayoutMode;
+  /** when the first-run tips were dismissed (null = never shown) */
+  tipsDismissedAt: number | null;
   theme: ThemeMode;
   iconStyle: IconStyle;
   accent: string;
@@ -63,6 +79,8 @@ export interface Settings {
   wallpapers: CustomWallpaper[];
   showFavorites: boolean;
   favoritesTitle: string;
+  showFrequentlyVisited: boolean;
+  frequentTitle: string;
   showReadingList: boolean;
   showPrivacyReport: boolean;
   showSearch: boolean;
@@ -74,6 +92,10 @@ export interface Settings {
   dim: number;
   /** 0–40, blur radius for the glass surfaces */
   blur: number;
+  /** vignette + fine film grain over the wallpaper */
+  ambient: boolean;
+  /** slow drift animation on gradient wallpapers */
+  wallpaperMotion: boolean;
   columnsMac: number;
   columnsIos: number;
   rowsIos: number;
@@ -83,6 +105,8 @@ export interface Settings {
 export interface StoreState {
   version: number;
   items: Item[];
+  /** itemId → visit stats (see ItemStats) */
+  stats: Record<string, ItemStats>;
   settings: Settings;
   settingsUpdatedAt: number;
   updatedAt: number;

@@ -9,6 +9,8 @@ const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
  * Three entries, one build:
  *   popup.html    → the Quick Save sheet
  *   newtab.html   → the start page (only reachable if the new-tab override is on)
+ *   options.html  → Settings (default folder, data, shortcuts, new-tab help)
+ *   welcome.html  → first-run guide, opened once on install
  *   background.ts → the service worker, forced to a stable filename because
  *                   manifest.json references `background.js` by name.
  */
@@ -36,6 +38,8 @@ export default defineConfig({
       input: {
         popup: here('popup.html'),
         newtab: here('newtab.html'),
+        options: here('options.html'),
+        welcome: here('welcome.html'),
         background: here('src/background.ts'),
       },
       output: {

@@ -80,10 +80,14 @@ export function SearchField({
           }}
           aria-label="Search"
         />
-        {query && (
+        {query ? (
           <button type="button" className="btn btn-ghost" onClick={() => setQuery('')} aria-label="Clear search">
             ✕
           </button>
+        ) : (
+          <span className="engine-chip" title={engine === 'none' ? 'Bookmarks only' : `Searches ${ENGINES[engine]?.name}`}>
+            {engine === 'none' ? 'Bookmarks' : ENGINES[engine]?.name}
+          </span>
         )}
       </div>
       <AnimatePresence>
@@ -134,10 +138,12 @@ export function ReadingList({
   items,
   onOpen,
   onContextMenu,
+  onRemove,
 }: {
   items: Item[];
   onOpen: (item: Item) => void;
   onContextMenu: (item: Item, x: number, y: number) => void;
+  onRemove: (item: Item) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `container:${READING_ID}`, data: { containerId: READING_ID } });
   return (
@@ -149,10 +155,24 @@ export function ReadingList({
         style={{ maxWidth: 760 }}
       >
         {items.length === 0 ? (
-          <div className="section-empty">Drag a favorite here to read it later.</div>
+          <div className="empty-card">
+            <span className="glyph" aria-hidden>
+              ☰
+            </span>
+            <div>
+              <strong>Nothing saved for later</strong>
+              <p>Drag a favorite here, or use “Add to Reading List” from a tile’s context menu.</p>
+            </div>
+          </div>
         ) : (
           items.map((item) => (
-            <ReadingRow key={item.id} item={item} onOpen={onOpen} onContextMenu={onContextMenu} />
+            <ReadingRow
+              key={item.id}
+              item={item}
+              onOpen={onOpen}
+              onContextMenu={onContextMenu}
+              onRemove={onRemove}
+            />
           ))
         )}
       </div>
@@ -164,17 +184,26 @@ function ReadingRow({
   item,
   onOpen,
   onContextMenu,
+  onRemove,
 }: {
   item: Item;
   onOpen: (item: Item) => void;
   onContextMenu: (item: Item, x: number, y: number) => void;
+  onRemove: (item: Item) => void;
 }) {
   const { src, onError } = useFaviconSrc(item);
   return (
-    <button
-      type="button"
+    <div
       className="reading-row"
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(item)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen(item);
+        }
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         onContextMenu(item, event.clientX, event.clientY);
@@ -186,8 +215,25 @@ function ReadingRow({
         <span className="title block">{item.title}</span>
         <span className="host block">{hostLabel(item.url)}</span>
       </span>
-      <span className="host">{new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
-    </button>
+      <span className="flex items-center gap-2">
+        <span className="host">
+          {new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+        </span>
+        <span className="row-actions">
+          <button
+            type="button"
+            title="Remove from Reading List"
+            aria-label={`Remove ${item.title} from Reading List`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove(item);
+            }}
+          >
+            ✕
+          </button>
+        </span>
+      </span>
+    </div>
   );
 }
 
@@ -223,12 +269,26 @@ export function PrivacyReport({ state }: { state: StoreState }) {
     <section className="section" aria-label="Privacy report">
       <h2 className="section-title">Privacy Report</h2>
       <div className="privacy-card glass">
-        <h4>Safari Start Page blocked nothing — because it never phones home.</h4>
-        <p>
-          {stats.bookmarks} bookmarks across {stats.folders} folders, spanning {stats.hosts} sites. Everything lives in
-          this browser profile: no account, no analytics, no server{' '}
-          {stats.recent > 0 ? `· ${stats.recent} added this week` : ''}.
-        </p>
+        <h4>Nothing to block — this page never phones home.</h4>
+        <div className="stat-row">
+          <span className="stat">
+            <b>{stats.bookmarks}</b>
+            <span>bookmarks</span>
+          </span>
+          <span className="stat">
+            <b>{stats.folders}</b>
+            <span>folders</span>
+          </span>
+          <span className="stat">
+            <b>{stats.hosts}</b>
+            <span>sites</span>
+          </span>
+          <span className="stat">
+            <b>{stats.recent}</b>
+            <span>added this week</span>
+          </span>
+        </div>
+        <p>No account, no analytics, no server — everything lives in this browser profile.</p>
         <div className="privacy-bars" aria-hidden>
           {bars.map((value, index) => (
             <i key={index} style={{ height: `${Math.max(12, (value / max) * 100)}%` }} />
@@ -261,7 +321,13 @@ export function StatusPill({ connected, onSync }: { connected: boolean; onSync: 
   );
 }
 
-export function Toasts({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: string) => void }) {
+export function Toasts({
+  toasts,
+  onDismiss,
+}: {
+  toasts: Toast[];
+  onDismiss: (id: string) => void;
+}) {
   return (
     <div aria-live="polite">
       <AnimatePresence>
@@ -276,6 +342,13 @@ export function Toasts({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id:
             transition={{ type: 'spring', stiffness: 420, damping: 32 }}
           >
             <span>{toast.message}</span>
+            {typeof toast.duration === 'number' && (
+              <span
+                className="toast-progress"
+                style={{ animation: `toast-countdown ${toast.duration}ms linear forwards` }}
+                aria-hidden
+              />
+            )}
             {toast.actionLabel && (
               <button
                 type="button"

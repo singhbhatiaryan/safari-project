@@ -21,6 +21,8 @@ export interface Toast {
   message: string;
   actionLabel?: string;
   action?: () => void;
+  /** how long it stays up, used to draw the countdown bar */
+  duration?: number;
 }
 
 export interface Snapshot {
@@ -219,7 +221,13 @@ class StartPageStore {
 
   toast(message: string, options: { actionLabel?: string; action?: () => void; duration?: number } = {}): void {
     const id = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const toast: Toast = { id, message, actionLabel: options.actionLabel, action: options.action };
+    const toast: Toast = {
+      id,
+      message,
+      actionLabel: options.actionLabel,
+      action: options.action,
+      duration: options.duration ?? TOAST_MS,
+    };
     this.toasts = [...this.toasts, toast];
     this.emit();
     const timer = window.setTimeout(() => this.dismissToast(id), options.duration ?? TOAST_MS);

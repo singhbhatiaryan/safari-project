@@ -8,9 +8,11 @@ accounts, no server, everything stays in your browser.
 ```
 ┌─ the website ──────────────────────────┐   ┌─ the extension ─────────────────┐
 │  macOS Safari Start Page   ·   iOS     │   │  ⌘⇧S  popup for the active tab  │
-│  Favorites grid · folders · drag/merge │◄──┤  ⌘⇧E  instant save (no popup)   │
-│  13 wallpapers · light/dark · tinted   │   │  ⌘⇧Space  open the start page   │
-│  search · reading list · import/export │   │  optional new-tab replacement   │
+│  Favorites · Frequently Visited ·      │   │  ⌘⇧E  instant save (no popup)   │
+│  Reading List · Privacy Report         │◄──┤  ⌘⇧Space  open the start page   │
+│  drag onto a tile to build a folder    │   │  Settings page · Welcome guide  │
+│  13 wallpapers · light/dark · tinted   │   │  optional new-tab replacement   │
+│  search · selection bar · import/export│   │  ⌘⏎ save & open                 │
 └────────────────────────────────────────┘   └─────────────────────────────────┘
 ```
 
@@ -25,6 +27,10 @@ practical guide.
 npm install          # installs the two workspaces (web, extension)
 npm run build        # builds the website AND the loadable extension
 ```
+
+Installing the extension opens a one-time **welcome page** with the two shortcuts, and
+its **Settings** page (extension icon → right-click → Options, or the popup's Settings
+button) holds the default save folder, data export/import and shortcut overview.
 
 ### a) Run the website
 
@@ -66,8 +72,9 @@ npm run newtab status # see the current state
 
 | How | What happens |
 | --- | --- |
-| **⌘⇧S** or click the toolbar icon | Popup: edit the title, pick a destination folder, Save |
+| **⌘⇧S** or click the toolbar icon | Popup: edit the title, pick a destination folder (searchable), Save |
 | **⌘⇧E** | Saves instantly and flashes a ✓ badge — no popup |
+| **⌘⏎** in the popup | Save and open the start page |
 | Right-click a page | *Save Page to Safari Start Page* |
 | Right-click a link | *Save Link to Safari Start Page* |
 | On the start page | **+ Bookmark**, **⌘N**, or drag a link from any tab onto the grid |
@@ -92,9 +99,21 @@ override is on). **⌘⇧Space** opens the start page from anywhere; the popup a
 Select several tiles with ⌘/Ctrl/Shift-click first and the whole group merges or moves
 as one.
 
+### What is on the page
+
+| Section | Where the data comes from |
+| --- | --- |
+| **Favorites** | your top-level tiles; drag to reorder, drag onto a tile to merge |
+| **Frequently Visited** | how often you actually open a tile from this page. It stays hidden until something has been opened twice, and *Reset* on the section header forgets the counts |
+| **Privacy Report** | live counts of what is stored — this page makes no network calls of its own |
+| **Reading List** | drag a favorite in, or use the context menu. Hover a row to remove it |
+| **Search** | your bookmarks first, then the chosen engine (Google, DuckDuckGo, Bing, Brave, Wikipedia or none) |
+
+Sections can each be switched off in the customizer.
+
 ### Customise
 
-The bottom-right slider button opens the glass customizer: layout (macOS/iOS), wallpapers,
+The bottom-right slider button (or **⌘,**) opens the glass customizer: layout (macOS/iOS), wallpapers,
 upload your own (downscaled to 2560 px, stored in IndexedDB), light/dark/auto, icon style
 (colour / dark / tinted), accent colour, glass blur, wallpaper dim, columns & rows, which
 sections show, search engine, and the Favorites heading.
@@ -107,10 +126,19 @@ On the start page:
 | --- | --- |
 | `⌘N` / `⇧⌘N` | New bookmark / new folder |
 | `⌘Z` / `⇧⌘Z` | Undo / redo (60 steps, covers deletes, merges, moves) |
+| `↑ ↓ ← →` | Move between tiles. At the edge of an iOS page, left/right flip pages |
+| `Space` | Toggle selection on the focused tile |
+| `⌘A` | Select every tile in the grid |
 | `Delete` / `⌫` | Delete the selection (undoable from the toast) |
+| `⌘,` | Customize wallpaper, theme and layout |
+| `?` | Shortcut and gesture reference |
 | `/` | Focus search (when the search field is on) |
-| `Esc` | Close the folder window / menu / clear selection |
-| Right-click | Context menu: open, copy link, rename, duplicate, move to…, dissolve folder, delete |
+| `Esc` | Close the top-most panel, then clear the selection |
+| Right-click | Context menu: open, copy link, edit title/URL, duplicate, move to…, dissolve folder, delete |
+
+Selecting tiles reveals a floating action bar (new folder, Reading List, Dock, duplicate,
+delete) — the same idea as Safari's contextual toolbar. On a trackpad in the iOS layout,
+a two-finger horizontal swipe flips pages.
 
 Elsewhere (extension commands):
 
@@ -137,7 +165,7 @@ Elsewhere (extension commands):
 | `npm run build:web` | Website → `web/release/` |
 | `npm run build:ext` | Extension → `extension/release/` (load this unpacked) |
 | `npm run serve:web` | Zero-dependency static server for the built site |
-| `npm test` | 89 checks: store algorithms, a jsdom render of the real app, the extension bridge and the real service worker |
+| `npm test` | 112 checks: store/merge/visit-stats algorithms, a jsdom render of the real app, the extension bridge and the real service worker |
 | `npm run typecheck` | `tsc --noEmit` for both workspaces |
 | `npm run newtab on\|off\|status` | Toggle the new-tab override |
 | `node scripts/make-icons.mjs` | Regenerate the extension/app icons (pure Node PNG writer) |
@@ -158,17 +186,20 @@ shared/src/          THE single source of truth for both apps
   adapter.ts         website half of the extension bridge
 
 web/                 the start page website
-  src/components/    StartPage, Tiles, FolderOverlay, CustomizePanel, ContextMenu, Dialogs, Panels
+  src/components/    StartPage, Tiles, Toolbar, FrequentlyVisited, FolderOverlay,
+                     CustomizePanel, ContextMenu, Dialogs, Panels, HelpSheet, SelectionBar
   src/state/         store wrapper (undo, toasts, persistence) + React hooks
-  src/lib/           squircle geometry, favicon hooks, small helpers
+  src/lib/           squircle geometry, favicon hooks, grid keyboard navigation
   src/styles.css     the whole Apple design system
 
 extension/           the Chrome MV3 extension
   public/manifest.json  MV3 manifest (permissions, commands, new-tab override)
   public/bridge.js      content script that relays the website ⇄ worker
   src/background.ts     service worker: authoritative store, commands, context menus
-  src/popup/            the Quick Save sheet
+  src/popup/            the Quick Save sheet (searchable folder picker, duplicate notice, ⌘⏎)
   src/newtab/           new-tab entry that renders the very same StartPage component
+  src/options/          Settings page: default folder, data, shortcuts, new-tab help
+  src/welcome/          first-run guide, opened once on install
   release/              built extension — "Load unpacked" this folder
 
 scripts/             serve · icon generator · new-tab toggle · smoke tests
@@ -220,6 +251,15 @@ It only merges after ~0.4 s of hovering — dropping fast just reorders. If it s
 happens, press **⌘Z**: merges are undoable, splits included (*Dissolve Folder* in the
 context menu).
 
+**Frequently Visited is empty.**
+That is deliberate: it fills in as you open tiles from the page (twice for a tile to
+qualify). *Reset* on its header, or *Clear visit history* in the customizer, empties it
+again. Turning it off is a switch in the customizer.
+
+**The first-run tips keep coming back.**
+They show once per browser profile and are recorded in `settings.tipsDismissedAt`
+whenever the sheet closes. If you clear site data, they will appear once more.
+
 **Deletes vanished my folder and its contents.**
 They are tombstoned, not erased: the toast's **Undo** restores the whole subtree for 6 s,
 and **⌘Z** restores it afterwards.
@@ -234,10 +274,10 @@ always work.
 ## 7. Status
 
 Built and verified in this repo: shared core, website (both layouts, drag-merge, undo,
-import/export, customizer), extension (popup, worker, bridge, new-tab, context menus,
-commands), generated icons, and a smoke-test suite that mounts the real app, drives
-`bridge.js` against a fake content-script channel, and runs the actual service worker
-against a mocked `chrome.*` API.
+import/export, customizer, keyboard navigation, visit statistics), extension (popup,
+worker, bridge, new-tab, settings and welcome pages, context menus, commands), generated
+icons, and a smoke-test suite that mounts the real app, drives `bridge.js` against a fake
+content-script channel, and runs the actual service worker against a mocked `chrome.*` API.
 
 Not included on purpose (see PLAN.md §10): cloud sync/accounts, cross-profile Chrome
 sync, real-Safari `.appex` packaging, per-folder icons.

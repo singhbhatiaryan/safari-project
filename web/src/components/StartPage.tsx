@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   CollisionDetection,
   DndContext,
-  DragEndEvent,
-  DragOverEvent,
+  type DragEndEvent,
+  type DragOverEvent,
   DragOverlay,
-  DragStartEvent,
+  type DragStartEvent,
   KeyboardSensor,
   MouseSensor,
   TouchSensor,
@@ -22,6 +22,7 @@ import {
   READING_ID,
   StoreState,
   childrenOf,
+  clearStats,
   collectDescendants,
   createFolder,
   deleteItems,
@@ -29,22 +30,26 @@ import {
   liveItems,
   mergeIntoFolder,
   moveItems,
-  resolveWallpaper,
+  recordOpen,
   requestBridgeSync,
+  resolveWallpaper,
   restoreItems,
   uid,
 } from '@safari/shared';
 import { store } from '../state/store';
-import {
-  useChildren,
-  useDwell,
-  useElementWidth,
-  useSettings,
-  useStartPage,
-  useSystemTheme,
-} from '../state/hooks';
+import { useChildren, useDwell, useElementWidth, useSettings, useStartPage, useSystemTheme } from '../state/hooks';
 import { useLongPress, useWallpaperUrls } from '../lib/hooks-lib';
-import { Indicator, AddTile, GhostIcon, Tile } from './Tiles';
+import {
+  activeGrid,
+  chunk,
+  focusTile,
+  focusedTileIndex,
+  gridColumns,
+  nextIndex,
+  tilesIn,
+  type Direction,
+} from '../lib/navigation';
+import { AddTile, GhostIcon, Tile, type Indicator } from './Tiles';
 import { ContextMenu, type ContextMenuActions, type MenuTarget } from './ContextMenu';
 import { FolderOverlay } from './FolderOverlay';
 import { CustomizePanel } from './CustomizePanel';
@@ -55,17 +60,29 @@ import {
   type ConfirmState,
   type EditSheetState,
 } from './Dialogs';
-import { PrivacyReport, ReadingList, SearchField, StatusPill, Toasts } from './Panels';
+import { PrivacyReport, ReadingList, SearchField, Toasts } from './Panels';
+import { SlidersGlyph, Toolbar } from './Toolbar';
+import { HelpSheet } from './HelpSheet';
+import { FrequentlyVisited } from './FrequentlyVisited';
+import { SelectionBar } from './SelectionBar';
 
 const MERGE_DWELL_MS = 420;
 const ITEM_PREFIX = 'item:';
 const CONTAINER_PREFIX = 'container:';
 const PAGE_PREFIX = 'page:';
+const PAGE_WHEEL_LOCK_MS = 380;
 
 const containerKey = (parentId: string | null): string => `${CONTAINER_PREFIX}${parentId ?? 'root'}`;
 const containerFromKey = (key: string): string | null => {
   const raw = key.slice(CONTAINER_PREFIX.length);
   return raw === 'root' ? null : raw;
+};
+
+const ARROW_DIRECTIONS: Record<string, Direction> = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
 };
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -75,18 +92,17 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable;
 }
 
-function chunk<T>(list: T[], size: number): T[][] {
-  if (size <= 0) return [list];
-  const out: T[][] = [];
-  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
-  return out.length ? out : [[]];
-}
-
 export function StartPage() {
   const { state, connected, canUndo, canRedo, toasts } = useStartPage();
   const settings = useSettings();
   const systemTheme = useSystemTheme();
   const scheme = settings.theme === 'system' ? systemTheme : settings.theme;
+
+  /* ---------------- mirrors so callbacks can stay identity-stable ---------------- */
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
   /* ---------------- wallpaper + theme tokens ---------------- */
   const customUrls = useWallpaperUrls(settings.wallpapers.map((w) => w.id));
@@ -96,8 +112,6 @@ export function StartPage() {
     const root = document.documentElement;
     root.dataset.scheme = scheme;
     root.dataset.iconStyle = settings.iconStyle;
-    root.classList.toggle('icon-dark', settings.iconStyle === 'dark');
-    root.classList.toggle('icon-tinted', settings.iconStyle === 'tinted');
     root.classList.toggle('contrast-ink', wallpaper.scheme === 'light');
     root.classList.toggle('reduce-motion', settings.reduceMotion);
     root.style.setProperty('--accent', settings.accent);
@@ -114,18 +128,41 @@ export function StartPage() {
 
   /* ---------------- ui state ---------------- */
   const [selection, setSelection] = useState<string[]>([]);
+  const selectionSet = useMemo(() => new Set(selection), [selection]);
+  const selectionRef = useRef(selectionSet);
+  selectionRef.current = selectionSet;
+
   const [openFolderId, setOpenFolderId] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const [editSheet, setEditSheet] = useState<EditSheetState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [sheet, setSheet] = useState<'tips' | 'help' | null>(null);
   const [jiggle, setJiggle] = useState(false);
   const [iosPage, setIosPage] = useState(0);
+  const [pageDirection, setPageDirection] = useState(1);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   const openFolder = openFolderId ? itemById(state.items, openFolderId) ?? null : null;
-  const selectedItems = selection.map((id) => itemById(state.items, id)).filter((i): i is Item => Boolean(i));
+  const selectedItems = useMemo(
+    () => selection.map((id) => itemById(state.items, id)).filter((i): i is Item => Boolean(i)),
+    [selection, state.items],
+  );
+
+  /* ---------------- first run: show the tips once ---------------- */
+  const markTipsSeen = useCallback(() => {
+    if (settingsRef.current.tipsDismissedAt !== null) return;
+    store.mutate((s) => ({
+      ...s,
+      settings: { ...s.settings, tipsDismissedAt: Date.now() },
+      settingsUpdatedAt: Date.now(),
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (settingsRef.current.tipsDismissedAt === null) setSheet('tips');
+  }, []);
 
   /* ---------------- drag state ---------------- */
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -171,10 +208,12 @@ export function StartPage() {
   const handleDragStart = (event: DragStartEvent) => {
     const itemId = (event.active.data.current as { itemId?: string } | undefined)?.itemId;
     if (!itemId) return;
-    const item = itemById(state.items, itemId);
+    const snapshot = stateRef.current;
+    const item = itemById(snapshot.items, itemId);
     if (!item) return;
-    const group = (selection.includes(itemId) ? selection : [itemId])
-      .map((id) => itemById(state.items, id))
+    const current = selectionRef.current;
+    const group = (current.has(itemId) ? [...current] : [itemId])
+      .map((id) => itemById(snapshot.items, id))
       .filter((i): i is Item => Boolean(i))
       .filter((i) => i.parentId === item.parentId)
       .map((i) => i.id);
@@ -238,7 +277,7 @@ export function StartPage() {
       if (dwellRef.current !== overId) {
         dwellRef.current = overId;
         dwell.setTarget(overId);
-        window.setTimeout(() => setIosPage(page), MERGE_DWELL_MS);
+        window.setTimeout(() => changePage(page), MERGE_DWELL_MS);
       }
     }
   };
@@ -258,9 +297,10 @@ export function StartPage() {
   const handleDragEnd = (event: DragEndEvent) => {
     const ids = dragIdsRef.current;
     const overId = event.over?.id ? String(event.over.id) : null;
-    const mergeWith = overId && overId.startsWith(ITEM_PREFIX) && dwell.target === overId.slice(ITEM_PREFIX.length)
-      ? overId.slice(ITEM_PREFIX.length)
-      : null;
+    const mergeWith =
+      overId && overId.startsWith(ITEM_PREFIX) && dwell.target === overId.slice(ITEM_PREFIX.length)
+        ? overId.slice(ITEM_PREFIX.length)
+        : null;
     const side = indicator === 'after' ? 'after' : 'before';
     const pageTarget = overId?.startsWith(PAGE_PREFIX) ? Number(overId.slice(PAGE_PREFIX.length)) : null;
     resetDragState();
@@ -297,12 +337,19 @@ export function StartPage() {
     }
 
     if (pageTarget !== null) {
-      const perPage = Math.max(1, settings.columnsIos * settings.rowsIos);
+      const current = settingsRef.current;
+      const perPage = Math.max(1, current.columnsIos * current.rowsIos);
       store.mutate((s) => moveItems(s, ids, { parentId: null, index: pageTarget * perPage }));
     }
   };
 
-  /* ---------------- actions ---------------- */
+  /* ---------------- actions (identity-stable where tiles depend on them) -------- */
+
+  const recordVisit = useCallback((id: string) => {
+    // Not undoable: a visit is not an edit, and ⌘Z must not "un-visit" a page.
+    store.mutate((s) => recordOpen(s, id), { undoable: false });
+  }, []);
+
   const openItem = useCallback(
     (item: Item, newTab?: boolean) => {
       if (item.type === 'folder') {
@@ -310,12 +357,13 @@ export function StartPage() {
         setSelection([]);
         return;
       }
-      const target = newTab ?? settings.openInNewTab;
       if (!item.url) return;
+      recordVisit(item.id);
+      const target = newTab ?? settingsRef.current.openInNewTab;
       if (target) window.open(item.url, '_blank', 'noopener,noreferrer');
       else window.location.href = item.url;
     },
-    [settings.openInNewTab],
+    [recordVisit],
   );
 
   const performDelete = useCallback((items: Item[]) => {
@@ -349,6 +397,60 @@ export function StartPage() {
     [performDelete],
   );
 
+  const duplicateItems = useCallback((items: Item[]) => {
+    store.mutate((s) => {
+      const clone = (sourceId: string, parentId: string | null): Item[] => {
+        const source = itemById(s.items, sourceId);
+        if (!source) return [];
+        const newId = uid();
+        const copy: Item = {
+          ...source,
+          id: newId,
+          parentId,
+          order: childrenOf(s.items, parentId).length,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        const nested = childrenOf(s.items, sourceId).flatMap((child) => clone(child.id, newId));
+        return [copy, ...nested];
+      };
+      const created = items.flatMap((item) => clone(item.id, item.parentId));
+      return { ...s, items: [...s.items, ...created], updatedAt: Date.now() };
+    });
+    setSelection([]);
+    store.toast(`Duplicated ${items.length} item${items.length === 1 ? '' : 's'}.`);
+  }, []);
+
+  const moveToContainer = useCallback((items: Item[], parentId: string | null, message: string) => {
+    store.mutate((s) => moveItems(s, items.map((i) => i.id), { parentId }));
+    setSelection([]);
+    store.toast(message);
+  }, []);
+
+  const onSelect = useCallback((item: Item, additive: boolean) => {
+    setSelection((current) => {
+      if (!additive) return current.includes(item.id) && current.length === 1 ? [] : [item.id];
+      return current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id];
+    });
+  }, []);
+
+  const onTileContextMenu = useCallback((item: Item, x: number, y: number) => {
+    if (!selectionRef.current.has(item.id)) setSelection([item.id]);
+    setMenu({ item, x, y });
+  }, []);
+
+  const onRemoveBadge = useCallback(
+    (item: Item) => {
+      deleteSelection([item]);
+    },
+    [deleteSelection],
+  );
+
+  const newFolder = useCallback((parentId: string | null) => {
+    store.mutate((s) => createFolder(s, { parentId }).state);
+    store.toast('Folder created.');
+  }, []);
+
   const contextActions: ContextMenuActions = {
     onOpen: (item, newTab) => openItem(item, newTab),
     onCopyLink: (item) => {
@@ -359,29 +461,7 @@ export function StartPage() {
         .catch(() => store.toast('Clipboard permission denied.'));
     },
     onRename: (item) => setEditSheet({ mode: item.type, item }),
-    onDuplicate: (item) => {
-      store.mutate((s) => {
-        const clone = (sourceId: string, parentId: string | null): { items: Item[]; rootId: string } => {
-          const source = itemById(s.items, sourceId);
-          if (!source) return { items: [], rootId: '' };
-          const newId = uid();
-          const copy: Item = {
-            ...source,
-            id: newId,
-            parentId,
-            title: source.title,
-            order: childrenOf(s.items, parentId).length,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
-          const nested = childrenOf(s.items, sourceId).flatMap((child) => clone(child.id, newId).items);
-          return { items: [copy, ...nested], rootId: newId };
-        };
-        const created = clone(item.id, item.parentId);
-        return { ...s, items: [...s.items, ...created.items], updatedAt: Date.now() };
-      });
-      store.toast('Duplicated.');
-    },
+    onDuplicate: (item) => duplicateItems([item]),
     onDelete: (items) => deleteSelection(items),
     onNewFolderWith: (items) => {
       let folderId: string | null = null;
@@ -405,54 +485,105 @@ export function StartPage() {
       setOpenFolderId(null);
       store.toast('Folder dissolved.');
     },
-    onMoveTo: (items, parentId) => {
-      store.mutate((s) => moveItems(s, items.map((i) => i.id), { parentId }));
-      setSelection([]);
-    },
-    onAddToReadingList: (items) => {
-      store.mutate((s) => moveItems(s, items.map((i) => i.id), { parentId: READING_ID }));
-      store.toast(`Added to Reading List.`);
-    },
-    onAddToDock: (items) => {
-      store.mutate((s) => moveItems(s, items.map((i) => i.id), { parentId: DOCK_ID }));
-      store.toast(`Added to Dock.`, { actionLabel: undefined });
-    },
-    onRemoveFromContainer: (items) => {
-      store.mutate((s) => moveItems(s, items.map((i) => i.id), { parentId: null }));
-    },
-    onNewBookmark: () => setEditSheet({ mode: 'bookmark', parentId: null }),
-    onNewFolder: () => {
-      store.mutate((s) => createFolder(s, { parentId: null }).state);
-      store.toast('Folder created.');
-    },
+    onMoveTo: (items, parentId) => moveToContainer(items, parentId, 'Moved.'),
+    onAddToReadingList: (items) => moveToContainer(items, READING_ID, 'Added to Reading List.'),
+    onAddToDock: (items) => moveToContainer(items, DOCK_ID, 'Added to the Dock.'),
+    onRemoveFromContainer: (items) => moveToContainer(items, null, 'Returned to Favorites.'),
+    onNewBookmark: () => setEditSheet({ mode: 'bookmark', parentId: openFolderId ?? null }),
+    onNewFolder: () => newFolder(null),
     onCustomize: () => setCustomizeOpen(true),
     onExport: () => setImportOpen(true),
     onImport: () => setImportOpen(true),
   };
 
-  const onSelect = (item: Item, additive: boolean) => {
-    setSelection((current) => {
-      if (!additive) return current.includes(item.id) && current.length === 1 ? [] : [item.id];
-      return current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id];
+  /* ---------------- iOS paging ---------------- */
+  const perPage = Math.max(1, settings.columnsIos * settings.rowsIos);
+  const pages = useMemo(() => chunk(favorites, perPage), [favorites, perPage]);
+  const pageIndex = Math.min(iosPage, Math.max(0, pages.length - 1));
+  const pageRef = useRef({ index: pageIndex, count: pages.length });
+  pageRef.current = { index: pageIndex, count: pages.length };
+
+  const changePage = useCallback((page: number) => {
+    setIosPage((current) => {
+      const clamped = Math.max(0, page);
+      setPageDirection(clamped >= current ? 1 : -1);
+      return clamped;
     });
-  };
+  }, []);
+
+  const stepPage = useCallback(
+    (delta: number) => {
+      const { index, count } = pageRef.current;
+      const next = Math.min(Math.max(index + delta, 0), Math.max(0, count - 1));
+      if (next !== index) changePage(next);
+    },
+    [changePage],
+  );
+
+  /* ---------------- render helpers ---------------- */
+  const renderTile = useCallback(
+    (item: Item, visits?: number, overrides: Partial<{ labels: boolean }> = {}): ReactNode => (
+      <Tile
+        key={item.id}
+        item={item}
+        allItems={allItems}
+        layout={settings.layout}
+        labels={overrides.labels ?? settings.labels}
+        jiggle={jiggle && settings.layout === 'ios'}
+        selected={selectionSet.has(item.id)}
+        isMergeTarget={mergeTargetId === item.id}
+        indicator={activeId && overItemId === item.id && !mergeTargetId ? indicator : null}
+        visits={visits}
+        onOpen={openItem}
+        onSelect={onSelect}
+        onContextMenu={onTileContextMenu}
+        onRemoveBadge={onRemoveBadge}
+      />
+    ),
+    [
+      allItems,
+      settings.layout,
+      settings.labels,
+      jiggle,
+      selectionSet,
+      mergeTargetId,
+      activeId,
+      overItemId,
+      indicator,
+      openItem,
+      onSelect,
+      onTileContextMenu,
+      onRemoveBadge,
+    ],
+  );
 
   /* ---------------- keyboard ---------------- */
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
+  const handleKeyboard = useCallback(
+    (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
       const typing = isTypingTarget(event.target);
 
       if (event.key === 'Escape') {
         if (menu) return setMenu(null);
+        if (sheet) return setSheet(null);
         if (openFolderId) return setOpenFolderId(null);
         if (customizeOpen) return setCustomizeOpen(false);
         if (jiggle) return setJiggle(false);
-        if (selection.length) return setSelection([]);
+        if (selectionRef.current.size) return setSelection([]);
         return;
       }
       if (typing) return;
 
+      if (meta && event.key === ',') {
+        event.preventDefault();
+        setCustomizeOpen((v) => !v);
+        return;
+      }
+      if (event.key === '?' || (event.shiftKey && event.key === '/')) {
+        event.preventDefault();
+        setSheet((current) => (current === 'help' ? null : 'help'));
+        return;
+      }
       if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         if (event.shiftKey) store.redo();
@@ -464,60 +595,106 @@ export function StartPage() {
         setEditSheet({ mode: event.shiftKey ? 'folder' : 'bookmark', parentId: openFolderId ?? null });
         return;
       }
-      if (event.key === '/' && settings.showSearch) {
+      if (event.key === '/' && settingsRef.current.showSearch) {
         event.preventDefault();
         searchRef.current?.focus();
         return;
       }
-      if ((event.key === 'Backspace' || event.key === 'Delete') && selectedItems.length) {
-        event.preventDefault();
-        deleteSelection(selectedItems);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [menu, openFolderId, customizeOpen, jiggle, selection, selectedItems, settings.showSearch, deleteSelection]);
 
-  /* ---------------- render helpers ---------------- */
-  const renderTile = useCallback(
-    (item: Item, overrides: Partial<{ labels: boolean }> = {}): ReactNode => (
-      <Tile
-        key={item.id}
-        item={item}
-        allItems={allItems}
-        layout={settings.layout}
-        labels={overrides.labels ?? settings.labels}
-        jiggle={jiggle && settings.layout === 'ios'}
-        selected={selection.includes(item.id)}
-        isMergeTarget={mergeTargetId === item.id}
-        indicator={activeId && overItemId === item.id && !mergeTargetId ? indicator : null}
-        onOpen={openItem}
-        onSelect={onSelect}
-        onContextMenu={(subject, x, y) => {
-          if (!selection.includes(subject.id)) setSelection([subject.id]);
-          setMenu({ item: subject, x, y });
-        }}
-        onRemoveBadge={(subject) => deleteSelection([subject])}
-      />
-    ),
-    [
-      allItems,
-      settings.layout,
-      settings.labels,
-      jiggle,
-      selection,
-      mergeTargetId,
-      activeId,
-      overItemId,
-      indicator,
-      openItem,
-      deleteSelection,
-    ],
+      const grid = activeGrid();
+      if (!grid) return;
+      const columns = gridColumns(grid);
+      const tiles = tilesIn(grid);
+      const count = tiles.length;
+      const current = focusedTileIndex(grid);
+
+      if (meta && event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        const ids = Array.from(grid.querySelectorAll<HTMLElement>('.tile-slot[data-item-id]'))
+          .map((node) => node.dataset.itemId)
+          .filter((id): id is string => Boolean(id));
+        setSelection(ids);
+        return;
+      }
+
+      const direction = ARROW_DIRECTIONS[event.key];
+      if (direction) {
+        event.preventDefault();
+        if (current < 0) {
+          focusTile(grid, 0);
+          return;
+        }
+        const next = nextIndex(current, direction, { columns, count });
+        if (next !== null) {
+          focusTile(grid, next);
+          return;
+        }
+        // At an edge in the iOS layout, arrows flip pages — like the keyboard does
+        // on a real iOS device with a hardware keyboard.
+        if (settingsRef.current.layout === 'ios') {
+          if (direction === 'right') {
+            const { index, count: pageCount } = pageRef.current;
+            if (index < pageCount - 1) {
+              changePage(index + 1);
+              window.setTimeout(() => focusTile(activeGrid(), 0), 60);
+            }
+          } else if (direction === 'left') {
+            const { index } = pageRef.current;
+            if (index > 0) {
+              changePage(index - 1);
+              window.setTimeout(() => {
+                const target = tilesIn(activeGrid());
+                focusTile(activeGrid(), target.length - 1);
+              }, 60);
+            }
+          }
+        }
+        return;
+      }
+
+      if (event.key === ' ') {
+        const focused = current >= 0 ? tiles[current] : null;
+        const itemId = focused?.closest<HTMLElement>('.tile-slot[data-item-id]')?.dataset.itemId;
+        if (itemId) {
+          event.preventDefault();
+          const item = itemById(stateRef.current.items, itemId);
+          if (item) onSelect(item, true);
+        }
+        return;
+      }
+
+      if ((event.key === 'Backspace' || event.key === 'Delete') && selectionRef.current.size) {
+        event.preventDefault();
+        const items = [...selectionRef.current]
+          .map((id) => itemById(stateRef.current.items, id))
+          .filter((i): i is Item => Boolean(i));
+        deleteSelection(items);
+      }
+    },
+    [menu, sheet, openFolderId, customizeOpen, jiggle, deleteSelection, onSelect, changePage],
   );
 
-  const perPage = Math.max(1, settings.columnsIos * settings.rowsIos);
-  const pages = useMemo(() => chunk(favorites, perPage), [favorites, perPage]);
-  const pageIndex = Math.min(iosPage, Math.max(0, pages.length - 1));
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyboard);
+    return () => window.removeEventListener('keydown', handleKeyboard);
+  }, [handleKeyboard]);
+
+  /* ---------------- iOS wheel paging ---------------- */
+  const wheelLock = useRef(0);
+  const onIosWheel = useCallback(
+    (event: React.WheelEvent) => {
+      const dominant = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : 0;
+      if (Math.abs(dominant) < 18) return;
+      const now = Date.now();
+      if (now < wheelLock.current) return;
+      wheelLock.current = now + PAGE_WHEEL_LOCK_MS;
+      stepPage(dominant > 0 ? 1 : -1);
+    },
+    [stepPage],
+  );
+
+  /* ---------------- render ---------------- */
+  const showIos = settings.layout === 'ios';
 
   const dragGhost = activeItem ? (
     <div className="relative">
@@ -532,8 +709,6 @@ export function StartPage() {
     </div>
   ) : null;
 
-  const showIos = settings.layout === 'ios';
-
   return (
     <DndContext
       sensors={sensors}
@@ -543,22 +718,35 @@ export function StartPage() {
       onDragEnd={handleDragEnd}
       onDragCancel={resetDragState}
     >
-      <div className="startpage" onContextMenu={(event) => {
-        if (event.defaultPrevented) return;
-        event.preventDefault();
-        setMenu({ item: null, x: event.clientX, y: event.clientY });
-      }}>
+      <div
+        className="startpage"
+        onContextMenu={(event) => {
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          setMenu({ item: null, x: event.clientX, y: event.clientY });
+        }}
+      >
         <div
           className="wallpaper"
           // `background` shorthand resets background-color, so re-declare it after.
           style={{ background: wallpaper.css, backgroundColor: '#101014' }}
           aria-hidden
         />
+        {settings.wallpaperMotion && <div className="wallpaper-drift" aria-hidden />}
+        {settings.ambient && (
+          <>
+            <div className="wallpaper-vignette" aria-hidden />
+            <div className="wallpaper-grain" aria-hidden />
+          </>
+        )}
         <div className="wallpaper-dim" aria-hidden />
 
-        <div className="startpage-content" onClick={(event) => {
-          if (event.target === event.currentTarget) setSelection([]);
-        }}>
+        <div
+          className="startpage-content"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setSelection([]);
+          }}
+        >
           {settings.showSearch && (
             <div className="mb-7">
               <SearchField engine={settings.searchEngine} state={state} onOpenItem={openItem} inputRef={searchRef} />
@@ -570,70 +758,88 @@ export function StartPage() {
             canUndo={canUndo}
             canRedo={canRedo}
             jiggle={jiggle}
-            showIos={showIos}
+            layout={settings.layout}
             onUndo={() => store.undo()}
             onRedo={() => store.redo()}
             onAddBookmark={() => setEditSheet({ mode: 'bookmark', parentId: openFolderId ?? null })}
-            onAddFolder={() => {
-              store.mutate((s) => createFolder(s, { parentId: openFolderId ?? null }).state);
-              store.toast('Folder created.');
-            }}
+            onAddFolder={() => newFolder(null)}
             onImportExport={() => setImportOpen(true)}
             onToggleJiggle={() => setJiggle((v) => !v)}
             onSync={() => requestBridgeSync()}
-            onDoneJiggle={() => setJiggle(false)}
+            onLayoutChange={(layout) => store.mutate((s) => ({ ...s, settings: { ...s.settings, layout }, settingsUpdatedAt: Date.now() }))}
+            onOpenHelp={() => setSheet('help')}
+            onCustomize={() => setCustomizeOpen((v) => !v)}
           />
 
           {showIos ? (
             <IosHome
               pages={pages}
               pageIndex={pageIndex}
+              direction={pageDirection}
               perPage={perPage}
               columns={settings.columnsIos}
               renderTile={renderTile}
               labels={settings.labels}
-              onPageChange={(page) => setIosPage(page)}
+              onPageChange={changePage}
+              onWheel={onIosWheel}
               onAddBookmark={() => setEditSheet({ mode: 'bookmark', parentId: null })}
-              onAddFolder={() => {
-                store.mutate((s) => createFolder(s, { parentId: null }).state);
-                store.toast('Folder created.');
-              }}
+              onAddFolder={() => newFolder(null)}
               onLongPress={() => setJiggle(true)}
             />
           ) : (
-            <FavoritesSection
-              title={settings.favoritesTitle}
-              items={favorites}
-              columns={settings.columnsMac}
-              renderTile={renderTile}
-              show={settings.showFavorites}
-              onAddBookmark={() => setEditSheet({ mode: 'bookmark', parentId: null })}
-              onAddFolder={() => {
-                store.mutate((s) => createFolder(s, { parentId: null }).state);
-                store.toast('Folder created.');
-              }}
-              layout={settings.layout}
-            />
-          )}
+            <>
+              {settings.showFavorites && (
+                <FavoritesSection
+                  title={settings.favoritesTitle}
+                  items={favorites}
+                  columns={settings.columnsMac}
+                  renderTile={renderTile}
+                  onAddBookmark={() => setEditSheet({ mode: 'bookmark', parentId: null })}
+                  onAddFolder={() => newFolder(null)}
+                  layout={settings.layout}
+                />
+              )}
 
-          {!showIos && settings.showReadingList && (
-            <ReadingList items={readingItems} onOpen={openItem} onContextMenu={(item, x, y) => {
-              setSelection([item.id]);
-              setMenu({ item, x, y });
-            }} />
+              {settings.showFrequentlyVisited && (
+                <FrequentlyVisited
+                  state={state}
+                  limit={Math.max(4, settings.columnsMac)}
+                  title={settings.frequentTitle}
+                  renderTile={(item, visits) => renderTile(item, visits)}
+                  onClear={() => {
+                    store.mutate((s) => clearStats(s));
+                    store.toast('Visit history cleared.');
+                  }}
+                />
+              )}
+
+              {settings.showPrivacyReport && <PrivacyReport state={state} />}
+
+              {settings.showReadingList && (
+                <ReadingList
+                  items={readingItems}
+                  onOpen={openItem}
+                  onContextMenu={onTileContextMenu}
+                  onRemove={(item) => moveToContainer([item], null, 'Returned to Favorites.')}
+                />
+              )}
+            </>
           )}
-          {!showIos && settings.showPrivacyReport && <PrivacyReport state={state} />}
         </div>
 
         {showIos && settings.showDock && (
-          <Dock items={dockItems} renderTile={(item) => renderTile(item, { labels: false })} onAdd={() => setEditSheet({ mode: 'bookmark', parentId: DOCK_ID })} />
+          <Dock
+            items={dockItems}
+            renderTile={(item) => renderTile(item, undefined, { labels: false })}
+            onAdd={() => setEditSheet({ mode: 'bookmark', parentId: DOCK_ID })}
+          />
         )}
 
         <button
           type="button"
           className="icon-btn customize-fab"
           aria-label="Customize start page"
-          title="Customize"
+          title="Customize (⌘,)"
           onClick={() => setCustomizeOpen((v) => !v)}
         >
           <SlidersGlyph />
@@ -643,6 +849,7 @@ export function StartPage() {
           open={customizeOpen}
           onClose={() => setCustomizeOpen(false)}
           onImportExport={() => setImportOpen(true)}
+          onOpenHelp={() => setSheet('help')}
           customUrls={customUrls}
         />
       </div>
@@ -657,9 +864,25 @@ export function StartPage() {
             key={openFolder.id}
             folder={openFolder}
             state={state}
-            renderTile={renderTile}
+            renderTile={(item) => renderTile(item)}
             onClose={() => setOpenFolderId(null)}
             onNewBookmark={() => setEditSheet({ mode: 'bookmark', parentId: openFolder.id })}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {sheet && (
+          <HelpSheet
+            key={sheet}
+            variant={sheet}
+            onClose={() => {
+              // Closing the first-run tips by any route counts as "seen" — nobody
+              // wants them back on every load.
+              if (sheet === 'tips') markTipsSeen();
+              setSheet(null);
+            }}
+            onDismissTips={markTipsSeen}
           />
         )}
       </AnimatePresence>
@@ -673,6 +896,16 @@ export function StartPage() {
           onClose={() => setMenu(null)}
         />
       )}
+
+      <SelectionBar
+        items={selectedItems}
+        onNewFolder={() => contextActions.onNewFolderWith(selectedItems)}
+        onReadingList={() => contextActions.onAddToReadingList(selectedItems)}
+        onDock={() => contextActions.onAddToDock(selectedItems)}
+        onDuplicate={() => duplicateItems(selectedItems)}
+        onDelete={() => deleteSelection(selectedItems)}
+        onClear={() => setSelection([])}
+      />
 
       {editSheet && <EditSheet state={editSheet} onClose={() => setEditSheet(null)} />}
       {confirm && <ConfirmSheet state={confirm} onClose={() => setConfirm(null)} />}
@@ -696,73 +929,6 @@ export function StartPage() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Toolbar                                                             */
-/* ------------------------------------------------------------------ */
-
-function Toolbar({
-  connected,
-  canUndo,
-  canRedo,
-  jiggle,
-  showIos,
-  onUndo,
-  onRedo,
-  onAddBookmark,
-  onAddFolder,
-  onImportExport,
-  onToggleJiggle,
-  onSync,
-  onDoneJiggle,
-}: {
-  connected: boolean;
-  canUndo: boolean;
-  canRedo: boolean;
-  jiggle: boolean;
-  showIos: boolean;
-  onUndo: () => void;
-  onRedo: () => void;
-  onAddBookmark: () => void;
-  onAddFolder: () => void;
-  onImportExport: () => void;
-  onToggleJiggle: () => void;
-  onSync: () => void;
-  onDoneJiggle: () => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 mb-5 flex-wrap">
-      <StatusPill connected={connected} onSync={onSync} />
-      <div className="flex items-center gap-2">
-        {jiggle && showIos && (
-          <button type="button" className="btn btn-primary" onClick={onDoneJiggle}>
-            Done
-          </button>
-        )}
-        {showIos && !jiggle && (
-          <button type="button" className="btn" onClick={onToggleJiggle}>
-            Edit Layout
-          </button>
-        )}
-        <button type="button" className="icon-btn" aria-label="Undo" title="Undo (⌘Z)" disabled={!canUndo} onClick={onUndo} style={!canUndo ? { opacity: 0.4 } : undefined}>
-          ↺
-        </button>
-        <button type="button" className="icon-btn" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!canRedo} onClick={onRedo} style={!canRedo ? { opacity: 0.4 } : undefined}>
-          ↻
-        </button>
-        <button type="button" className="btn" onClick={onAddBookmark} title="New bookmark (⌘N)">
-          + Bookmark
-        </button>
-        <button type="button" className="btn" onClick={onAddFolder} title="New folder (⇧⌘N)">
-          + Folder
-        </button>
-        <button type="button" className="btn" onClick={onImportExport}>
-          Import / Export
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* macOS Safari start page layout                                      */
 /* ------------------------------------------------------------------ */
 
@@ -771,7 +937,6 @@ function FavoritesSection({
   items,
   columns,
   renderTile,
-  show,
   onAddBookmark,
   onAddFolder,
   layout,
@@ -780,7 +945,6 @@ function FavoritesSection({
   items: Item[];
   columns: number;
   renderTile: (item: Item) => ReactNode;
-  show: boolean;
   onAddBookmark: () => void;
   onAddFolder: () => void;
   layout: 'macos' | 'ios';
@@ -794,25 +958,37 @@ function FavoritesSection({
     return Math.max(2, Math.min(columns, fitting || columns));
   }, [columns, layout, width]);
 
-  if (!show) {
-    return <>{items.length > 0 && <div className="hint mb-6">Favorites are hidden — turn them back on in Customize.</div>}</>;
-  }
-
   return (
     <section className="section" aria-label="Favorites">
-      <h2 className="section-title">{title}</h2>
+      <div className="section-head">
+        <h2 className="section-title">{title}</h2>
+        <button type="button" className="section-action" onClick={onAddBookmark}>
+          + Add
+        </button>
+      </div>
       <div
         ref={(node) => {
           setNodeRef(node);
           ref.current = node;
         }}
+        data-grid
+        role="group"
+        aria-label={`${title} grid`}
         className={`icon-grid dropzone ${isOver ? 'is-over' : ''}`}
         style={{ gridTemplateColumns: `repeat(${effectiveColumns}, minmax(0, var(--tile)))`, justifyContent: 'start' }}
       >
         {items.map((item) => renderTile(item))}
         {items.length === 0 && (
-          <div className="section-empty" style={{ gridColumn: `span ${Math.min(effectiveColumns, 4)}` }}>
-            No favorites yet — drop a link here, press <kbd>⌘N</kbd>, or use the extension to save a tab.
+          <div className="empty-card" style={{ gridColumn: `1 / span ${Math.min(effectiveColumns, 4)}` }}>
+            <span className="glyph" aria-hidden>
+              ★
+            </span>
+            <div>
+              <strong>No favorites yet</strong>
+              <p>
+                Drop a link here, press <kbd>⌘N</kbd>, or save a tab with the extension (<kbd>⌘⇧S</kbd>).
+              </p>
+            </div>
           </div>
         )}
         <AddTile onAddBookmark={onAddBookmark} onAddFolder={onAddFolder} layout={layout} />
@@ -828,22 +1004,26 @@ function FavoritesSection({
 function IosHome({
   pages,
   pageIndex,
+  direction,
   perPage,
   columns,
   renderTile,
   labels,
   onPageChange,
+  onWheel,
   onAddBookmark,
   onAddFolder,
   onLongPress,
 }: {
   pages: Item[][];
   pageIndex: number;
+  direction: number;
   perPage: number;
   columns: number;
   renderTile: (item: Item) => ReactNode;
   labels: boolean;
   onPageChange: (page: number) => void;
+  onWheel: (event: React.WheelEvent) => void;
   onAddBookmark: () => void;
   onAddFolder: () => void;
   onLongPress: () => void;
@@ -857,39 +1037,34 @@ function IosHome({
     <section className="section flex-1 flex flex-col" aria-label="Home screen">
       <div
         ref={setNodeRef}
-        className={`icon-grid dropzone flex-1 content-start ${isOver ? 'is-over' : ''}`}
-        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, var(--tile)))`, justifyContent: 'center' }}
+        className={`dropzone ios-page flex-1 ${isOver ? 'is-over' : ''}`}
+        onWheel={onWheel}
         onPointerDown={longPress.onPointerDown}
         onPointerMove={longPress.onPointerMove}
         onPointerUp={longPress.onPointerUp}
         onPointerLeave={longPress.onPointerLeave}
       >
-        <AnimatePresence mode="popLayout" initial={false}>
-          {page.map((item) => (
-            <motion.div
-              key={item.id}
-              initial={{ opacity: 0, scale: 0.92 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.92 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 40 }}
-            >
-              {renderTile(item)}
-            </motion.div>
-          ))}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={pageIndex}
+            data-grid
+            role="group"
+            aria-label={`Home screen page ${pageIndex + 1}`}
+            className="icon-grid"
+            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, var(--tile)))`, justifyContent: 'center' }}
+            initial={{ opacity: 0, x: direction * 48 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: direction * -48 }}
+            transition={{ type: 'spring', stiffness: 460, damping: 40 }}
+          >
+            {page.map((item) => renderTile(item))}
+            {isLastPage && <AddTile onAddBookmark={onAddBookmark} onAddFolder={onAddFolder} layout="ios" />}
+          </motion.div>
         </AnimatePresence>
-        {isLastPage && (
-          <AddTile onAddBookmark={onAddBookmark} onAddFolder={onAddFolder} layout="ios" />
-        )}
       </div>
 
       <div className="flex justify-center py-4">
-        <PageDots
-          count={pages.length}
-          index={pageIndex}
-          onChange={onPageChange}
-          perPage={perPage}
-          labels={labels}
-        />
+        <PageDots count={pages.length} index={pageIndex} onChange={onPageChange} perPage={perPage} labels={labels} />
       </div>
     </section>
   );
@@ -945,9 +1120,7 @@ function PageDot({
       className={`page-dot ${active ? 'active' : ''} ${isOver ? 'is-over' : ''}`}
       aria-selected={active}
       role="tab"
-      title={
-        labels ? `Page ${page + 1} — drop here to move to this page` : `Page ${page + 1}`
-      }
+      title={labels ? `Page ${page + 1} — drop here to move to this page` : `Page ${page + 1}`}
       aria-label={`Page ${page + 1} (holds up to ${perPage} icons)`}
       onClick={onSelect}
     />
@@ -975,20 +1148,13 @@ function Dock({
         {items.map((item) => renderTile(item))}
         {items.length === 0 && (
           <div className="hint" style={{ maxWidth: 260, textAlign: 'center' }}>
-            Drag favorites here to keep them in the Dock. <button type="button" className="btn btn-ghost" onClick={onAdd}>Add one</button>
+            Drag favorites here to keep them in the Dock.{' '}
+            <button type="button" className="btn btn-ghost" onClick={onAdd}>
+              Add one
+            </button>
           </div>
         )}
       </div>
     </div>
-  );
-}
-
-function SlidersGlyph() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-      <path d="M4 7h10M18 7h2M4 17h4M12 17h8" strokeLinecap="round" />
-      <circle cx="16" cy="7" r="2.2" />
-      <circle cx="10" cy="17" r="2.2" />
-    </svg>
   );
 }

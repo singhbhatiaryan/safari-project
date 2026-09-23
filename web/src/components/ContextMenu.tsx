@@ -62,11 +62,37 @@ export function ContextMenu({
       if (!ref.current?.contains(event.target as Node)) onClose();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      const items = Array.from(ref.current?.querySelectorAll<HTMLElement>('.menu-item:not([disabled])') ?? []);
+      if (!items.length) return;
+      const current = items.indexOf(document.activeElement as HTMLElement);
+      const move = (delta: number) => {
+        event.preventDefault();
+        const next = (current + delta + items.length) % items.length;
+        items[next]?.focus();
+      };
+      if (event.key === 'ArrowDown') move(current < 0 ? 1 : 1);
+      else if (event.key === 'ArrowUp') move(current < 0 ? items.length - 1 : -1);
+      else if (event.key === 'Home') {
+        event.preventDefault();
+        items[0]?.focus();
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        items[items.length - 1]?.focus();
+      }
     };
     window.addEventListener('mousedown', close, true);
     window.addEventListener('keydown', onKey);
+    // focus the first entry so the keyboard can drive it immediately
+    const timer = window.setTimeout(() => {
+      ref.current?.querySelector<HTMLElement>('.menu-item:not([disabled])')?.focus();
+    }, 10);
     return () => {
+      window.clearTimeout(timer);
       window.removeEventListener('mousedown', close, true);
       window.removeEventListener('keydown', onKey);
     };
@@ -126,14 +152,14 @@ export function ContextMenu({
 
       <div className="menu-sep" />
       <button type="button" className="menu-item" onClick={run(() => actions.onRename(item))}>
-        Rename…
+        {item.type === 'folder' ? 'Rename…' : 'Edit Title & URL…'}
       </button>
       <button type="button" className="menu-item" onClick={run(() => actions.onDuplicate(item))}>
         Duplicate
       </button>
 
       <div className="menu-sep" />
-      {item.type === 'bookmark' && (
+      {item.type === 'bookmark' && !inVirtual && (
         <button type="button" className="menu-item" onClick={run(() => actions.onAddToReadingList(targets))}>
           Add to Reading List
         </button>

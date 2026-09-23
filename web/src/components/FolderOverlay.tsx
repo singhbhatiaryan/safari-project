@@ -1,7 +1,7 @@
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { motion } from 'motion/react';
-import { Item, StoreState, childrenOf, liveItems } from '@safari/shared';
+import { Item, StoreState, childrenOf, itemById, liveItems } from '@safari/shared';
 import { store } from '../state/store';
 
 /**
@@ -22,7 +22,17 @@ export function FolderOverlay({
   onClose: () => void;
   onNewBookmark: () => void;
 }) {
-  const children = useMemo(() => childrenOf(state.items, folder.id), [state.items, folder.id]);
+  // Nested folders open *inside* the window (macOS behaviour) with a breadcrumb back.
+  const [trail, setTrail] = useState<string[]>([]);
+  const currentId = trail.length ? trail[trail.length - 1] : folder.id;
+
+  useEffect(() => setTrail([]), [folder.id]);
+
+  const current = useMemo(
+    () => (currentId === folder.id ? folder : itemById(state.items, currentId)),
+    [currentId, folder, state.items],
+  );
+  const children = useMemo(() => childrenOf(state.items, currentId), [state.items, currentId]);
   const nestedCount = useMemo(
     () => liveItems(state.items).filter((i) => children.some((c) => c.id === i.parentId)).length,
     [state.items, children],
@@ -31,27 +41,36 @@ export function FolderOverlay({
   // into the folder, so an accidental drop between icons does the sane thing.
   const { setNodeRef: setBackdropRef } = useDroppable({ id: 'container:root', data: { containerId: null } });
   const { setNodeRef: setWindowRef, isOver: windowIsOver } = useDroppable({
-    id: `container:${folder.id}`,
-    data: { containerId: folder.id },
+    id: `container:${currentId}`,
+    data: { containerId: currentId },
   });
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        if (trail.length) setTrail((previous) => previous.slice(0, -1));
+        else onClose();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, trail.length]);
 
   const rename = (title: string) => {
     store.mutate(
       (s) => ({
         ...s,
-        items: s.items.map((i) => (i.id === folder.id ? { ...i, title, updatedAt: Date.now() } : i)),
+        items: s.items.map((i) => (i.id === currentId ? { ...i, title, updatedAt: Date.now() } : i)),
         updatedAt: Date.now(),
       }),
-      { coalesceKey: `rename:${folder.id}` },
+      { coalesceKey: `rename:${currentId}` },
     );
+  };
+
+  const openChild = (item: Item) => {
+    if (item.type === 'folder') setTrail((previous) => [...previous, item.id]);
+    else if (item.url) window.open(item.url, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -68,9 +87,20 @@ export function FolderOverlay({
         aria-label={`Folder ${folder.title}`}
       >
         <div className="flex flex-col items-center gap-1">
+          <div className="breadcrumb">
+            <button
+              type="button"
+              onClick={() => setTrail((previous) => previous.slice(0, -1))}
+              disabled={!trail.length}
+              style={!trail.length ? { opacity: 0.35, color: 'inherit', cursor: 'default' } : undefined}
+              aria-label="Back to parent folder"
+            >
+              ‹ {trail.length ? itemById(state.items, trail[trail.length - 1])?.title ?? 'Back' : folder.title}
+            </button>
+          </div>
           <input
             className="folder-title-input"
-            value={folder.title}
+            value={current?.title ?? folder.title}
             aria-label="Folder name"
             onChange={(event) => rename(event.target.value)}
           />
@@ -82,10 +112,23 @@ export function FolderOverlay({
 
         <div className="folder-grid mt-4">
           {children.map((child) => (
-            <div key={child.id}>{renderTile(child)}</div>
+            <div key={child.id} onDoubleClick={() => child.type === 'folder' && openChild(child)}>
+              {renderTile(child)}
+            </div>
           ))}
+          {children.length === 0 && (
+            <div className="empty-card" style={{ gridColumn: '1 / -1' }}>
+              <span className="glyph" aria-hidden>
+                ✦
+              </span>
+              <div>
+                <strong>This folder is empty</strong>
+                <p>Drag favorites in, or add a bookmark below.</p>
+              </div>
+            </div>
+          )}
           <button type="button" className="folder-inner-tile" onClick={onNewBookmark} aria-label="Add to folder">
-            <span className="tile tile-dashed" style={{ width: 62, height: 62, clipPath: undefined }}>
+            <span className="tile tile-dashed" style={{ width: 62, height: 62 }}>
               <span className="tile-glyph">+</span>
             </span>
             <span className="tile-label">Add</span>

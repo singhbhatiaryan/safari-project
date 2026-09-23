@@ -179,21 +179,25 @@ async function saveActiveTab(): Promise<{ ok: boolean; title?: string; reason?: 
     favicon,
     parentId: prefs.defaultFolderId ?? null,
   });
-  await flashBadge('✓');
+  await flashBadge('✓', '#34C759', `Saved “${item.title}” to Safari Start Page`);
   return { ok: true, title: item.title };
 }
 
-async function flashBadge(text: string, colour = '#34C759'): Promise<void> {
+async function flashBadge(text: string, colour = '#34C759', tooltip?: string): Promise<void> {
   try {
     await chrome.action.setBadgeBackgroundColor({ color: colour });
     await chrome.action.setBadgeText({ text });
+    if (tooltip) await chrome.action.setTitle({ title: tooltip });
     setTimeout(() => {
       void chrome.action.setBadgeText({ text: '' }).catch(() => undefined);
+      void chrome.action.setTitle({ title: DEFAULT_TITLE }).catch(() => undefined);
     }, 1800);
   } catch {
-    /* action may be unavailable during teardown */
+    /* the action can be unavailable during teardown */
   }
 }
+
+const DEFAULT_TITLE = 'Save to Safari Start Page';
 
 function openStartPage(newTab = true): void {
   const url = chrome.runtime.getURL(NEWTAB_PAGE);
@@ -265,6 +269,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, respond) => {
     return false;
   }
 
+  if (type === 'SAFARI_OPEN_OPTIONS') {
+    void chrome.runtime.openOptionsPage();
+    respond({ ok: true });
+    return false;
+  }
+
   return false;
 });
 
@@ -276,7 +286,7 @@ chrome.commands.onCommand.addListener((command) => {
   if (command === 'instant_save') {
     void serial(async () => {
       const result = await saveActiveTab();
-      if (!result.ok) await flashBadge('!', '#FF453A');
+      if (!result.ok) await flashBadge('!', '#FF453A', 'This page cannot be bookmarked');
     });
     return;
   }
@@ -290,6 +300,8 @@ chrome.runtime.onInstalled.addListener((details) => {
     const existing = await chrome.storage.local.get(STORAGE_KEY);
     if (!existing?.[STORAGE_KEY]) await writeStore(createDefaultState(true));
     if (details.reason === 'install') {
+      // Show the welcome page once: the two shortcuts are invisible otherwise.
+      void chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
       chrome.contextMenus.create(
         {
           id: 'safari-save-page',

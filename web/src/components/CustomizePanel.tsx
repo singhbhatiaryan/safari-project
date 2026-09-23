@@ -14,6 +14,7 @@ import {
   putWallpaperFile,
   releaseWallpaperUrl,
   removeCustomWallpaper,
+  resetAppearance,
   setSettings,
   uid,
 } from '@safari/shared';
@@ -26,11 +27,13 @@ export function CustomizePanel({
   open,
   onClose,
   onImportExport,
+  onOpenHelp,
   customUrls,
 }: {
   open: boolean;
   onClose: () => void;
   onImportExport: () => void;
+  onOpenHelp: () => void;
   customUrls: Record<string, string>;
 }) {
   const settings = useSettings();
@@ -75,23 +78,34 @@ export function CustomizePanel({
           transition={{ type: 'spring', stiffness: 420, damping: 34 }}
           aria-label="Customize start page"
         >
-          <div className="flex items-center justify-between">
+          <div className="sticky-head flex items-center justify-between">
             <strong style={{ fontSize: 13 }}>Customize</strong>
-            <button type="button" className="btn btn-ghost" onClick={onClose} aria-label="Close customizer">
-              ✕
-            </button>
+            <span className="flex items-center gap-1">
+              <button type="button" className="btn btn-ghost" onClick={onOpenHelp} title="Shortcuts (?)">
+                Shortcuts
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={onClose} aria-label="Close customizer">
+                ✕
+              </button>
+            </span>
           </div>
 
           <div className="cp-group">
             <p className="cp-heading">Layout</p>
-            <Segmented<LayoutMode>
-              value={settings.layout}
-              options={[
-                { value: 'macos', label: 'Safari Start Page' },
-                { value: 'ios', label: 'iOS Home Screen' },
-              ]}
-              onChange={(value) => set({ layout: value })}
-            />
+            <div className="layout-thumbs">
+              <LayoutThumb
+                value="macos"
+                current={settings.layout}
+                label="Safari Start Page"
+                onSelect={(value) => set({ layout: value })}
+              />
+              <LayoutThumb
+                value="ios"
+                current={settings.layout}
+                label="iOS Home Screen"
+                onSelect={(value) => set({ layout: value })}
+              />
+            </div>
             <div className="cp-row">
               <span>Icon labels</span>
               <Toggle checked={settings.labels} onChange={(v) => set({ labels: v })} label="Icon labels" />
@@ -159,6 +173,18 @@ export function CustomizePanel({
             <div className="cp-row">
               <span>Wallpaper dim</span>
               <Slider min={0} max={70} value={settings.dim} onChange={(v) => set({ dim: v }, 'dim')} />
+            </div>
+            <div className="cp-row">
+              <span>Ambient vignette &amp; grain</span>
+              <Toggle checked={settings.ambient} onChange={(v) => set({ ambient: v })} label="Ambient background" />
+            </div>
+            <div className="cp-row">
+              <span>Animated wallpaper</span>
+              <Toggle
+                checked={settings.wallpaperMotion}
+                onChange={(v) => set({ wallpaperMotion: v })}
+                label="Animated wallpaper"
+              />
             </div>
             <div className="cp-row">
               <span>Reduce motion</span>
@@ -238,6 +264,14 @@ export function CustomizePanel({
               <Toggle checked={settings.showSearch} onChange={(v) => set({ showSearch: v })} label="Search field" />
             </div>
             <div className="cp-row">
+              <span>Frequently Visited</span>
+              <Toggle
+                checked={settings.showFrequentlyVisited}
+                onChange={(v) => set({ showFrequentlyVisited: v })}
+                label="Frequently Visited"
+              />
+            </div>
+            <div className="cp-row">
               <span>Reading list</span>
               <Toggle
                 checked={settings.showReadingList}
@@ -313,6 +347,31 @@ export function CustomizePanel({
                 Copy raw JSON
               </button>
             </div>
+            <div className="flex gap-2 flex-wrap" style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn danger-btn"
+                onClick={() => {
+                  store.mutate((s) => resetAppearance(s));
+                  store.toast('Appearance reset to defaults.', {
+                    actionLabel: 'Undo',
+                    action: () => store.undo(),
+                  });
+                }}
+              >
+                Reset appearance
+              </button>
+              <button
+                type="button"
+                className="btn danger-btn"
+                onClick={() => {
+                  store.mutate((s) => ({ ...s, stats: {} }));
+                  store.toast('Visit history cleared.');
+                }}
+              >
+                Clear visit history
+              </button>
+            </div>
             <p className="hint" style={{ marginTop: 10 }}>
               {connected
                 ? 'Extension connected: saves from the popup or a keyboard shortcut sync in within ~50 ms.'
@@ -322,6 +381,71 @@ export function CustomizePanel({
         </motion.aside>
       )}
     </AnimatePresence>
+  );
+}
+
+function LayoutThumb({
+  value,
+  current,
+  label,
+  onSelect,
+}: {
+  value: LayoutMode;
+  current: LayoutMode;
+  label: string;
+  onSelect: (value: LayoutMode) => void;
+}) {
+  const isIos = value === 'ios';
+  return (
+    <button
+      type="button"
+      className="layout-thumb"
+      aria-pressed={current === value}
+      onClick={() => onSelect(value)}
+      title={label}
+    >
+      <span className="sketch" aria-hidden>
+        {isIos ? (
+          <>
+            {/* dotted dock + 4×3 icon rows */}
+            {[0, 1, 2, 3].map((row) =>
+              [0, 1, 2, 3].map((column) => (
+                <i
+                  key={`${row}-${column}`}
+                  style={{
+                    left: 8 + column * 18,
+                    top: 5 + row * 9,
+                    width: 13,
+                    height: 7,
+                    borderRadius: 2.5,
+                  }}
+                />
+              )),
+            )}
+            <i style={{ left: 8, bottom: 3, width: 78, height: 8, borderRadius: 4, opacity: 0.5 }} />
+          </>
+        ) : (
+          <>
+            <i style={{ left: 8, top: 5, width: 30, height: 5, borderRadius: 3, opacity: 0.6 }} />
+            {[0, 1].map((row) =>
+              [0, 1, 2, 3, 4].map((column) => (
+                <i
+                  key={`${row}-${column}`}
+                  style={{
+                    left: 8 + column * 15,
+                    top: 16 + row * 14,
+                    width: 11,
+                    height: 11,
+                    borderRadius: 3.5,
+                  }}
+                />
+              )),
+            )}
+          </>
+        )}
+      </span>
+      <span>{label}</span>
+    </button>
   );
 }
 

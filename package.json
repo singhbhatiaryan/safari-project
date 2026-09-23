@@ -17,7 +17,8 @@
     "serve:web": "node scripts/serve.mjs",
     "typecheck": "tsc --noEmit -p web/tsconfig.json && tsc --noEmit -p extension/tsconfig.json",
     "newtab": "node scripts/toggle-newtab.mjs",
-    "smoke": "vite build -c scripts/smoke/vite.config.mts && node .tmp/smoke/run.mjs"
+    "smoke": "vite build -c scripts/smoke/vite.config.mts && node .tmp/smoke/run.mjs",
+    "test": "npm run smoke"
   },
   "devDependencies": {
     "@types/node": "^24.13.6",

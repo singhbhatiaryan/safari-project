@@ -6,6 +6,7 @@
 import {
   DOCK_ID,
   Item,
+  ItemStats,
   READING_ID,
   Settings,
   STORE_VERSION,
@@ -24,6 +25,7 @@ export const now = () => Date.now();
 export function createDefaultSettings(): Settings {
   return {
     layout: 'macos',
+    tipsDismissedAt: null,
     theme: 'system',
     iconStyle: 'default',
     accent: '#0A84FF',
@@ -31,6 +33,8 @@ export function createDefaultSettings(): Settings {
     wallpapers: [],
     showFavorites: true,
     favoritesTitle: 'Favorites',
+    showFrequentlyVisited: true,
+    frequentTitle: 'Frequently Visited',
     showReadingList: true,
     showPrivacyReport: true,
     showSearch: true,
@@ -40,6 +44,8 @@ export function createDefaultSettings(): Settings {
     openInNewTab: true,
     dim: 18,
     blur: 28,
+    ambient: true,
+    wallpaperMotion: false,
     columnsMac: 8,
     columnsIos: 4,
     rowsIos: 5,
@@ -101,6 +107,7 @@ export function createDefaultState(seed = true): StoreState {
   return {
     version: STORE_VERSION,
     items,
+    stats: {},
     settings: createDefaultSettings(),
     settingsUpdatedAt: t,
     updatedAt: t,
@@ -195,6 +202,30 @@ export function folderTree(items: Item[], parentId: string | null = null, depth 
   return out;
 }
 
+/**
+ * Most-opened bookmarks, for the "Frequently Visited" section.
+ * Falls back to nothing when the user has not opened anything from the page yet —
+ * the section stays hidden rather than inventing history, exactly like Safari does
+ * before it has any.
+ */
+export function topVisited(state: StoreState, limit = 8): Array<{ item: Item; stats: ItemStats }> {
+  return Object.entries(state.stats)
+    .map(([id, stats]) => ({ item: itemById(state.items, id), stats }))
+    .filter((entry): entry is { item: Item; stats: ItemStats } => Boolean(entry.item) && entry.stats.c > 0)
+    .sort((a, b) => b.stats.c - a.stats.c || b.stats.t - a.stats.t || a.item.order - b.item.order)
+    .slice(0, limit);
+}
+
+/** Seconds-since-epoch style sorting helper used when merging stats. */
+export function mergeStats(a: ItemStats | undefined, b: ItemStats | undefined): ItemStats {
+  return { c: Math.max(a?.c ?? 0, b?.c ?? 0), t: Math.max(a?.t ?? 0, b?.t ?? 0) };
+}
+
+/** Number of times an item has been opened from the start page. */
+export function visitCount(state: StoreState, id: string): number {
+  return state.stats[id]?.c ?? 0;
+}
+
 export function containsUrl(items: Item[], url: string, parentId: string | null): Item | undefined {
   return childrenOf(items, parentId).find((i) => i.url === url);
 }
@@ -230,6 +261,25 @@ export function addItem(
     deletedAt: null,
   };
   return { state: touch(state, normalizeOrders([...state.items, item])), item };
+}
+
+/**
+ * Records that the user opened `id` from the start page.
+ * Deliberately does not touch `items` or `updatedAt`: a visit is not an edit, and
+ * stamping the item would let a click outrank a real change during a merge.
+ */
+export function recordOpen(state: StoreState, id: string): StoreState {
+  const item = itemById(state.items, id);
+  if (!item) return state;
+  const previous = state.stats[id];
+  return {
+    ...state,
+    stats: { ...state.stats, [id]: { c: (previous?.c ?? 0) + 1, t: now() } },
+  };
+}
+
+export function clearStats(state: StoreState): StoreState {
+  return { ...state, stats: {} };
 }
 
 export function updateItem(state: StoreState, id: string, patch: Partial<Item>): StoreState {
@@ -394,6 +444,32 @@ export function ungroupFolder(state: StoreState, folderId: string): StoreState {
   return deleteItems(moved, [folderId]);
 }
 
+export function resetSettings(state: StoreState): StoreState {
+  return setSettings(state, createDefaultSettings());
+}
+
+/** Keeps items and stats, drops everything the user configured. */
+export function resetAppearance(state: StoreState): StoreState {
+  const defaults = createDefaultSettings();
+  const { wallpaper, wallpapers, layout, theme, iconStyle, accent, columnsMac, columnsIos, rowsIos, labels, dim, blur, ambient, wallpaperMotion } = defaults;
+  return setSettings(state, {
+    wallpaper,
+    wallpapers,
+    layout,
+    theme,
+    iconStyle,
+    accent,
+    columnsMac,
+    columnsIos,
+    rowsIos,
+    labels,
+    dim,
+    blur,
+    ambient,
+    wallpaperMotion,
+  });
+}
+
 export function setSettings(state: StoreState, patch: Partial<Settings>): StoreState {
   return { ...state, settings: { ...state.settings, ...patch }, settingsUpdatedAt: now(), updatedAt: now() };
 }
@@ -447,9 +523,23 @@ export function sanitize(input: unknown): StoreState {
     if (i.parentId === i.id || dangling) return { ...i, parentId: null };
     return i;
   });
+  // Stats are pruned to items we still know about so the map cannot grow forever.
+  const stats: Record<string, ItemStats> = {};
+  if (raw.stats && typeof raw.stats === 'object') {
+    for (const [id, value] of Object.entries(raw.stats as Record<string, unknown>)) {
+      if (!ids.has(id)) continue;
+      const entry = value as Partial<ItemStats> | null;
+      if (!entry || typeof entry !== 'object') continue;
+      const c = typeof entry.c === 'number' && entry.c > 0 ? Math.floor(entry.c) : 0;
+      const t = typeof entry.t === 'number' && entry.t > 0 ? entry.t : 0;
+      if (c > 0 || t > 0) stats[id] = { c, t };
+    }
+  }
+
   return {
     version: STORE_VERSION,
     items: normalizeOrders(healed),
+    stats,
     settings: { ...base.settings, ...(raw.settings || {}) },
     settingsUpdatedAt: typeof raw.settingsUpdatedAt === 'number' ? raw.settingsUpdatedAt : now(),
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : now(),
@@ -465,6 +555,7 @@ function annotate(state: StoreState): unknown {
   return {
     i: [...state.items].sort((a, b) => (a.id < b.id ? -1 : 1)),
     s: state.settings,
+    v: state.stats,
   };
 }
 

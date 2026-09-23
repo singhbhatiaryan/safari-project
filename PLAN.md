@@ -228,9 +228,25 @@ Everything you can do in one layout you can do in the other.
    keyboard shortcuts, undo/toasts.
 3. **Extension** — manifest, service worker, content-script bridge, popup, new-tab page,
    icon generator, new-tab toggle script.
-4. **Verification** — `npm run typecheck`, `npm test` (89 checks: the pure algorithms, a real
+4. **Verification** — `npm run typecheck`, `npm test` (112 checks: the pure algorithms, a real
    jsdom render of the app, both halves of the bridge, and the service worker run against a
    mocked `chrome.*` API), `npm run build`.
+5. **Polish pass** — glass toolbar, Frequently Visited from visit stats, first-run tips and
+   the `?` sheet, floating selection bar, grid keyboard navigation with iOS page flips,
+   ambient layers, layout thumbnails and reset in the customizer; plus the extension's
+   Settings and Welcome pages, searchable folder picker and duplicate handling in the popup.
+
+## 9a. Extension surface
+
+| Surface | Purpose |
+| --- | --- |
+| `popup.html` | Quick Save: title editing, injected apple-touch-icon discovery, searchable folder picker, duplicate detection, ⌘⏎ to save and open |
+| `newtab.html` | renders the shared `StartPage` — only reachable when the opt-in override is on |
+| `options.html` | default folder, save-and-open preference, live shortcut list from `chrome.commands`, new-tab helper text, JSON/HTML export, JSON import, delete-everything |
+| `welcome.html` | opened once on `onInstalled` (`reason === 'install'`) so the two invisible shortcuts get discovered |
+
+The shipped manifest has **no** `chrome_url_overrides`; the options and welcome pages only
+explain the override and how to enable it with `npm run newtab on` + Reload.
 
 ## 10. Deliberately out of scope (easy next steps)
 

@@ -125,6 +125,10 @@ const {
   folderTree,
   addItem,
   signature,
+  recordOpen,
+  topVisited,
+  clearStats,
+  visitCount,
 } = shared;
 
 group('store: defaults');
@@ -302,6 +306,86 @@ group('folders, docks and wallpapers');
   check('unknown reference falls back instead of throwing', resolveWallpaper('nope:1').id.length > 0);
 }
 
+group('stats: visit tracking powers Frequently Visited');
+{
+  let state = createDefaultState(false);
+  for (const title of ['Alpha', 'Beta', 'Gamma']) {
+    state = addItem(state, { type: 'bookmark', title, url: `https://${title.toLowerCase()}.example` }).state;
+  }
+  const [alpha, beta, gamma] = childrenOf(state.items, null);
+  const before = state.items.find((i) => i.id === alpha.id)!.updatedAt;
+
+  state = recordOpen(state, alpha.id);
+  state = recordOpen(state, alpha.id);
+  state = recordOpen(state, beta.id);
+  state = recordOpen(state, gamma.id);
+
+  check('clicks accumulate per item', visitCount(state, alpha.id) === 2 && visitCount(state, beta.id) === 1);
+  check('a visit stamps its own timestamp', (state.stats[alpha.id]?.t ?? 0) > 0);
+  check(
+    'a visit does NOT touch the item (so it can never win a merge against an edit)',
+    state.items.find((i) => i.id === alpha.id)!.updatedAt === before,
+  );
+
+  const ranked = topVisited(state, 5);
+  check('ranking is by clicks, most first', ranked[0]?.item.id === alpha.id, ranked.map((r) => r.item.title));
+  check('unopened items are excluded', ranked.length === 3);
+
+  const untouched = createDefaultState(false);
+  check('a fresh install has no Frequently Visited content', topVisited(untouched).length === 0);
+  check('clearing stats empties the ranking', topVisited(clearStats(state)).length === 0);
+  check('recording a visit for a missing item is a no-op', recordOpen(untouched, 'nope') === untouched);
+}
+
+group('stats: merging two devices never loses a click');
+{
+  const base = addItem(createDefaultState(false), { type: 'bookmark', title: 'Shared', url: 'https://shared.example' }).state;
+  const id = childrenOf(base.items, null)[0].id;
+
+  let laptop = recordOpen(recordOpen(base, id), id);
+  laptop = { ...laptop, stats: { [id]: { c: 4, t: 5000 } } };
+  let desktop = { ...base, stats: { [id]: { c: 7, t: 4000 } } };
+
+  const merged = mergeStates(laptop, desktop);
+  check('clicks merge as a maximum, not last-write-wins', merged.state.stats[id].c === 7, merged.state.stats[id]);
+  check('the newest timestamp survives', merged.state.stats[id].t === 5000);
+  check('merging stats is commutative', signature(mergeStates(desktop, laptop).state) === signature(merged.state));
+
+  const other = mergeStates(laptop, base);
+  check('a device with no stats cannot zero them out', other.state.stats[id].c === 4);
+}
+
+group('sanitize: stats are validated and pruned');
+{
+  const state = sanitize({
+    items: [{ id: 'live', type: 'bookmark', title: 'Live', url: 'https://live.example', parentId: null }],
+    stats: {
+      live: { c: 3, t: 1234 },
+      ghost: { c: 9, t: 9 },
+      broken: 'nonsense',
+      negative: { c: -4, t: -1 },
+    },
+  } as never);
+
+  check('known ids keep their stats', state.stats.live?.c === 3);
+  check('stats for deleted items are pruned', !('ghost' in state.stats));
+  check('junk entries are dropped', !('broken' in state.stats));
+  check('nonsense numbers are clamped away', !('negative' in state.stats));
+}
+
+group('settings: polish defaults exist and survive older stores');
+{
+  const fresh = createDefaultState(false);
+  check('first run has not seen the tips', fresh.settings.tipsDismissedAt === null);
+  check('Frequently Visited is on by default', fresh.settings.showFrequentlyVisited === true);
+  check('ambient vignette is on by default', fresh.settings.ambient === true);
+  check('animated wallpaper is off by default', fresh.settings.wallpaperMotion === false);
+
+  const upgraded = sanitize({ items: [], settings: { layout: 'ios' } } as never);
+  check('an old store gains the new keys', upgraded.settings.ambient === true && upgraded.settings.tipsDismissedAt === null);
+  check('an old store keeps what the user chose', upgraded.settings.layout === 'ios');
+}
+
 /* ------------------------------------------------------------------ */
 /* 2. render the real app in jsdom                                     */
 /* ------------------------------------------------------------------ */
@@ -352,6 +436,16 @@ group('app: mounts and renders the start page');
     childrenOf(store.getState().items, null).some((i) => i.type === 'folder'),
   );
 
+  // Frequently Visited appears once items have been opened more than once
+  const firstTwo = childrenOf(store.getState().items, null).slice(0, 3).map((i) => i.id);
+  await act(async () => {
+    store.mutate(
+      (s) => firstTwo.reduce((acc, id) => recordOpen(recordOpen(acc, id), id), s),
+      { broadcast: false, undoable: false },
+    );
+  });
+  check('Frequently Visited renders from real usage', container.innerHTML.includes('Frequently Visited'));
+
   // switch to the iOS layout and make sure the dock + page dots show up
   await act(async () => {
     store.mutate((s) => ({ ...s, settings: { ...s.settings, layout: 'ios', showDock: true } }), { broadcast: false });
@@ -363,7 +457,7 @@ group('app: mounts and renders the start page');
     store.mutate((s) => ({ ...s, settings: { ...s.settings, theme: 'dark', iconStyle: 'tinted' } }), { broadcast: false });
   });
   check('theme tokens applied to <html>', window.document.documentElement.dataset.scheme === 'dark');
-  check('icon style class applied', window.document.documentElement.classList.contains('icon-tinted'));
+  check('icon style applied to <html>', window.document.documentElement.dataset.iconStyle === 'tinted');
 
   await act(async () => {
     root.unmount();
