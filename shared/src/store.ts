@@ -33,7 +33,7 @@ export function createDefaultSettings(): Settings {
     favoritesTitle: 'Favorites',
     showReadingList: true,
     showPrivacyReport: true,
-    showSearch: false,
+    showSearch: true,
     searchEngine: 'google',
     showDock: true,
     labels: true,
