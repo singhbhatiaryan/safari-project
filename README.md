@@ -137,7 +137,7 @@ Elsewhere (extension commands):
 | `npm run build:web` | Website → `web/release/` |
 | `npm run build:ext` | Extension → `extension/release/` (load this unpacked) |
 | `npm run serve:web` | Zero-dependency static server for the built site |
-| `npm test` | 53 checks: store algorithms **and** a jsdom render of the real app |
+| `npm test` | 89 checks: store algorithms, a jsdom render of the real app, the extension bridge and the real service worker |
 | `npm run typecheck` | `tsc --noEmit` for both workspaces |
 | `npm run newtab on\|off\|status` | Toggle the new-tab override |
 | `node scripts/make-icons.mjs` | Regenerate the extension/app icons (pure Node PNG writer) |
@@ -235,7 +235,9 @@ always work.
 
 Built and verified in this repo: shared core, website (both layouts, drag-merge, undo,
 import/export, customizer), extension (popup, worker, bridge, new-tab, context menus,
-commands), generated icons, and a smoke-test suite that mounts the real app headlessly.
+commands), generated icons, and a smoke-test suite that mounts the real app, drives
+`bridge.js` against a fake content-script channel, and runs the actual service worker
+against a mocked `chrome.*` API.
 
 Not included on purpose (see PLAN.md §10): cloud sync/accounts, cross-profile Chrome
 sync, real-Safari `.appex` packaging, per-folder icons.

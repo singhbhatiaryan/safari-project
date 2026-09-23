@@ -228,8 +228,9 @@ Everything you can do in one layout you can do in the other.
    keyboard shortcuts, undo/toasts.
 3. **Extension** — manifest, service worker, content-script bridge, popup, new-tab page,
    icon generator, new-tab toggle script.
-4. **Verification** — `npm run typecheck`, `npm test` (53 checks: algorithms *and* a real
-   jsdom render of the app), `npm run build`.
+4. **Verification** — `npm run typecheck`, `npm test` (89 checks: the pure algorithms, a real
+   jsdom render of the app, both halves of the bridge, and the service worker run against a
+   mocked `chrome.*` API), `npm run build`.
 
 ## 10. Deliberately out of scope (easy next steps)
 

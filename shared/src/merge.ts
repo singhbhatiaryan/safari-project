@@ -33,9 +33,11 @@ export function mergeStates(local: StoreState, remote: StoreState): MergeResult 
     .filter((i) => !(i.deletedAt !== null && i.deletedAt < cutoff))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-  // Settings are merged as a document; the newest editor wins. Custom wallpapers
-  // are metadata only (bytes live in IndexedDB) so a union is always safe.
-  const localNewer = local.settingsUpdatedAt >= remote.settingsUpdatedAt;
+  // Settings are merged as a document; the newest editor wins. On an exact tie we
+  // take the incoming document: the local side already has its own copy, so the
+  // remote one is strictly new information. (Two edits in the same millisecond are
+  // otherwise arbitrary, and the page's change would silently disappear.)
+  const localNewer = local.settingsUpdatedAt > remote.settingsUpdatedAt;
   const settingsSource = localNewer ? local.settings : remote.settings;
   const wallpaperMap = new Map<string, StoreState['settings']['wallpapers'][number]>();
   for (const w of [...local.settings.wallpapers, ...remote.settings.wallpapers]) {

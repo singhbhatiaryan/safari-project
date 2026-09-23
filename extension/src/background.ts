@@ -40,7 +40,13 @@ interface Prefs {
 async function readStore(): Promise<StoreState> {
   const raw = await chrome.storage.local.get(STORAGE_KEY);
   const value = raw?.[STORAGE_KEY];
-  if (!value) return createDefaultState(true);
+  if (!value) {
+    // Seed once and persist, so every later read (and the page's first handshake)
+    // sees the same ids instead of a freshly generated set of defaults.
+    const seeded = createDefaultState(true);
+    await chrome.storage.local.set({ [STORAGE_KEY]: seeded });
+    return seeded;
+  }
   return sanitize(value);
 }
 

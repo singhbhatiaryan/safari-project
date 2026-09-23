@@ -9,6 +9,8 @@
  * merge used to keep the extension and the website in sync.
  */
 import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
   url: 'http://localhost:5173/',
@@ -367,6 +369,316 @@ group('app: mounts and renders the start page');
     root.unmount();
   });
   check('unmounts cleanly', container.innerHTML === '');
+}
+
+/* ------------------------------------------------------------------ */
+/* 3. the extension bridge, both halves                                */
+/* ------------------------------------------------------------------ */
+
+group('bridge: website half (adapter ⇄ content script events)');
+{
+  const { store } = await import('../../web/src/state/store');
+  const { BRIDGE_EVENTS, makeBookmark } = await import('@safari/shared');
+
+  store.connect();
+  check('starts disconnected on a plain page', store.getSnapshot().connected === false);
+
+  // the content script announces itself
+  window.dispatchEvent(new window.CustomEvent(BRIDGE_EVENTS.BRIDGE_READY));
+  check('handshake marks the page connected', store.getSnapshot().connected === true);
+
+  // worker pushes authoritative state; the page must ingest it
+  const remoteItem = makeBookmark({ title: 'Saved from the popup', url: 'https://popup.example' }, null, 99);
+  const remoteState = { ...store.getState(), items: [...store.getState().items, remoteItem] };
+  window.dispatchEvent(
+    new window.CustomEvent(BRIDGE_EVENTS.EXTERNAL_CHANGE, { detail: { state: remoteState } }),
+  );
+  check(
+    'a bookmark saved in the popup lands in the page',
+    store.getState().items.some((i) => i.id === remoteItem.id),
+  );
+
+  // a local edit must be advertised to the content script
+  let pushed: unknown = null;
+  const listener = (event: Event) => {
+    pushed = (event as CustomEvent<{ state?: unknown }>).detail?.state ?? null;
+  };
+  window.addEventListener(BRIDGE_EVENTS.LOCAL_CHANGE, listener);
+  const localItem = makeBookmark({ title: 'Made on the page', url: 'https://page.example' }, null, 100);
+  store.mutate((state) => ({ ...state, items: [...state.items, localItem], updatedAt: Date.now() }));
+  window.removeEventListener(BRIDGE_EVENTS.LOCAL_CHANGE, listener);
+  check('local edits are broadcast to the extension', Boolean(pushed));
+  check(
+    'the broadcast carries the new item',
+    Array.isArray((pushed as { items?: unknown[] })?.items) &&
+      ((pushed as { items: Array<{ id: string }> }).items.some((i) => i.id === localItem.id)),
+  );
+}
+
+group('bridge: extension half (bridge.js relay)');
+{
+  const source = readFileSync(fileURLToPath(new URL('../../extension/public/bridge.js', import.meta.url)), 'utf8');
+  const page = new JSDOM('<!doctype html><html data-safari-startpage><body></body></html>', {
+    url: 'http://localhost:5173/',
+    runScripts: 'outside-only',
+  });
+  const { window: w } = page;
+
+  const sent: Array<Record<string, unknown>> = [];
+  const workerListeners: Array<(message: unknown) => void> = [];
+  let helloReply: { state?: unknown } | undefined = { state: { items: [{ id: 'from-worker' }] } };
+
+  (w as unknown as { chrome: unknown }).chrome = {
+    runtime: {
+      lastError: undefined,
+      sendMessage: (message: Record<string, unknown>, callback?: (reply: unknown) => void) => {
+        sent.push(message);
+        if (message.type === 'SAFARI_BRIDGE_HELLO' && callback) callback(helloReply);
+        else callback?.({ ok: true });
+      },
+      onMessage: {
+        addListener: (listener: (message: unknown) => void) => workerListeners.push(listener),
+        removeListener: () => {},
+      },
+    },
+  };
+
+  w.eval(source);
+
+  check('bridge does nothing without the marker', (() => {
+    const plain = new JSDOM('<!doctype html><html><body></body></html>', { runScripts: 'outside-only' });
+    const plainSent: unknown[] = [];
+    (plain.window as unknown as { chrome: unknown }).chrome = {
+      runtime: { sendMessage: (m: unknown) => plainSent.push(m), onMessage: { addListener: () => {}, removeListener: () => {} } },
+    };
+    plain.window.eval(source);
+    return plainSent.length === 0;
+  })());
+
+  check('announces itself with a ping', sent.some((m) => m.type === 'SAFARI_PING'));
+  check('asks for the store on load', sent.some((m) => m.type === 'SAFARI_BRIDGE_HELLO'));
+
+  // worker → page
+  let external: unknown = null;
+  w.addEventListener('safari:store-external', (event: Event) => {
+    external = (event as unknown as { detail?: { state?: unknown } }).detail?.state ?? null;
+  });
+  workerListeners.forEach((listener) => listener({ type: 'SAFARI_STORE_APPLY', state: { items: [{ id: 'pushed' }] } }));
+  check('worker pushes reach the page as a CustomEvent', Boolean(external));
+
+  // page → worker
+  const localState = { items: [{ id: 'local-1' }] };
+  w.dispatchEvent(new w.CustomEvent('safari:store-local-change', { detail: { state: localState } }));
+  const push = sent.find((m) => m.type === 'SAFARI_STORE_PUSH');
+  check('page changes are forwarded to the worker', Boolean(push));
+  check('and carry the state through intact', JSON.stringify(push?.state) === JSON.stringify(localState));
+
+  // explicit resync
+  sent.length = 0;
+  w.dispatchEvent(new w.CustomEvent('safari:sync-request'));
+  check('a resync request re-asks the worker', sent.some((m) => m.type === 'SAFARI_BRIDGE_HELLO'));
+
+  // worker asleep / extension reloaded must not throw
+  helloReply = undefined;
+  let threw = false;
+  try {
+    w.dispatchEvent(new w.CustomEvent('safari:sync-request'));
+  } catch {
+    threw = true;
+  }
+  check('a missing worker reply is handled gracefully', threw === false);
+}
+
+group('extension worker: storage, handshake, saves, commands');
+{
+  // A chrome.* mock good enough to run the real background service worker.
+  const storage = new Map<string, unknown>();
+  const runtimeListeners: Array<(message: any, sender: unknown, respond: (r: unknown) => void) => boolean | void> = [];
+  const commandListeners: Array<(command: string) => void> = [];
+  const installedListeners: Array<(details: { reason: string }) => void> = [];
+  const tabMessages: Array<{ tabId: number; message: unknown }> = [];
+  const runtimeMessages: unknown[] = [];
+  const badges: string[] = [];
+  let activeTab: { id: number; url: string; title: string } | null = {
+    id: 7,
+    url: 'https://example.com/article',
+    title: 'An Article',
+  };
+  let injectedIcons: string[] = ['https://example.com/apple-touch-icon.png'];
+
+  const chromeMock = {
+    runtime: {
+      lastError: undefined,
+      id: 'mock-extension-id',
+      getURL: (path: string) => `chrome-extension://mock/${path.replace(/^\//, '')}`,
+      getManifest: () => ({ version: '1.2.3' }),
+      sendMessage: async (message: unknown) => {
+        runtimeMessages.push(message);
+      },
+      onMessage: { addListener: (listener: unknown) => runtimeListeners.push(listener as never) },
+      onInstalled: { addListener: (listener: unknown) => installedListeners.push(listener as never) },
+    },
+    storage: {
+      local: {
+        get: async (key: string | string[]) => {
+          const keys = Array.isArray(key) ? key : [key];
+          const out: Record<string, unknown> = {};
+          for (const k of keys) if (storage.has(k)) out[k] = storage.get(k);
+          return out;
+        },
+        set: async (values: Record<string, unknown>) => {
+          for (const [k, v] of Object.entries(values)) storage.set(k, v);
+        },
+      },
+    },
+    tabs: {
+      query: async () => (activeTab ? [activeTab] : []),
+      sendMessage: async (tabId: number, message: unknown) => {
+        tabMessages.push({ tabId, message });
+      },
+      create: async () => ({ id: 99 }),
+      update: async () => ({ id: 99 }),
+    },
+    scripting: {
+      executeScript: async () => [{ result: { icons: injectedIcons, title: 'An Article', description: '' } }],
+    },
+    action: {
+      setBadgeText: async ({ text }: { text: string }) => {
+        badges.push(text);
+      },
+      setBadgeBackgroundColor: async () => {},
+    },
+    commands: { onCommand: { addListener: (listener: unknown) => commandListeners.push(listener as never) } },
+    contextMenus: { create: () => {}, onClicked: { addListener: () => {} } },
+  };
+
+  Object.defineProperty(globalThis, 'chrome', { value: chromeMock, configurable: true, writable: true });
+
+  await import('../../extension/src/background');
+
+  const call = (message: unknown): Promise<any> =>
+    new Promise((resolve) => {
+      let answered = false;
+      for (const listener of runtimeListeners) {
+        const returned = listener(message, { id: 'mock-extension-id' }, (reply) => {
+          if (!answered) {
+            answered = true;
+            resolve(reply);
+          }
+        });
+        if (returned !== true && !answered) {
+          // synchronous responder (PING / OPEN_START_PAGE)
+          answered = true;
+          resolve(undefined);
+        }
+      }
+      setTimeout(() => {
+        if (!answered) resolve(undefined);
+      }, 120);
+    });
+
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+  check('the worker registered message + command listeners', runtimeListeners.length > 0 && commandListeners.length > 0);
+
+  const pong = await call({ type: 'SAFARI_PING' });
+  check('ping answers with the manifest version', pong?.version === '1.2.3');
+
+  const hello = await call({ type: 'SAFARI_BRIDGE_HELLO' });
+  check('hello returns the authoritative store', Array.isArray(hello?.state?.items) && hello.state.items.length > 0);
+  const seeded = hello.state.items.length;
+  check('the store was persisted on first read', storage.has('safari.startpage.v1'));
+
+  // saving from the popup
+  const saved = await call({
+    type: 'SAFARI_SAVE_TAB',
+    payload: { title: 'Saved from the popup', url: 'https://saved.example/page', favicon: null },
+  });
+  check('save returns the created item', saved?.item?.url === 'https://saved.example/page');
+  check('the item is in storage', (storage.get('safari.startpage.v1') as any).items.length === seeded + 1);
+  check(
+    'the save was broadcast to open tabs',
+    tabMessages.some((m) => (m.message as any)?.type === 'SAFARI_STORE_APPLY'),
+  );
+  check('the save was broadcast to extension pages', runtimeMessages.some((m) => (m as any)?.type === 'SAFARI_STORE_APPLY'));
+
+  // a folder-scoped save
+  const folderReply = await call({
+    type: 'SAFARI_SAVE_TAB',
+    payload: { title: 'Inside a folder', url: 'https://nested.example', parentId: 'seed-folder-reading' },
+  });
+  check('saving into a folder honours parentId', folderReply?.item?.parentId === 'seed-folder-reading');
+
+  // a page pushing its own state must merge, not clobber
+  const before = (storage.get('safari.startpage.v1') as any).items.length;
+  const pushReply = await call({
+    type: 'SAFARI_STORE_PUSH',
+    state: {
+      version: 1,
+      items: [
+        {
+          id: 'page-made',
+          type: 'bookmark',
+          parentId: null,
+          title: 'Made on the website',
+          url: 'https://site.example',
+          favicon: null,
+          order: 500,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          deletedAt: null,
+        },
+      ],
+      settings: { layout: 'ios', theme: 'dark' },
+      settingsUpdatedAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+  });
+  const after = (storage.get('safari.startpage.v1') as any).items.length;
+  check('page state merges without dropping worker items', after === before + 1, { before, after });
+  check('the page was answered with the merged store', pushReply?.state?.items?.length === after);
+  check('page settings came across', pushReply?.state?.settings?.layout === 'ios', {
+    layout: pushReply?.state?.settings?.layout,
+    theme: pushReply?.state?.settings?.theme,
+    accent: pushReply?.state?.settings?.accent,
+    keys: Object.keys(pushReply?.state?.settings ?? {}).length,
+  });
+
+  // prefs round-trip
+  await call({ type: 'SAFARI_SET_PREFS', prefs: { openAfterSave: true, defaultFolderId: null } });
+  check('prefs persist', (storage.get('safari.prefs') as any)?.openAfterSave === true);
+
+  // instant save (⌘⇧E)
+  const beforeCommand = (storage.get('safari.startpage.v1') as any).items.length;
+  commandListeners.forEach((listener) => listener('instant_save'));
+  await tick();
+  const itemsAfterCommand = (storage.get('safari.startpage.v1') as any).items;
+  check('⌘⇧E saves the active tab', itemsAfterCommand.length === beforeCommand + 1);
+  check(
+    'the saved tile kept the active tab url and found icon',
+    itemsAfterCommand.some(
+      (i: any) => i.url === 'https://example.com/article' && i.favicon === 'https://example.com/apple-touch-icon.png',
+    ),
+  );
+  check('a ✓ badge confirms the save', badges.includes('✓'));
+
+  // ⌘⇧E on an un-bookmarkable page must not throw or save
+  activeTab = { id: 8, url: 'chrome://settings', title: 'Settings' };
+  const beforeBlocked = (storage.get('safari.startpage.v1') as any).items.length;
+  commandListeners.forEach((listener) => listener('instant_save'));
+  await tick();
+  check('chrome:// pages are refused', (storage.get('safari.startpage.v1') as any).items.length === beforeBlocked);
+  check('and the badge reports the failure', badges.includes('!'));
+
+  // install flow
+  installedListeners.forEach((listener) => listener({ reason: 'install' }));
+  await tick();
+  check('onInstalled keeps the store intact', (storage.get('safari.startpage.v1') as any).items.length === beforeBlocked);
+
+  // delete via the popup's Undo button
+  const doomed = itemsAfterCommand.find((i: any) => i.url === 'https://example.com/article');
+  const afterDelete = await call({ type: 'SAFARI_DELETE_ITEMS', ids: [doomed.id] });
+  check('popup undo tombstones the item', afterDelete?.state?.items.some((i: any) => i.id === doomed.id && i.deletedAt));
 }
 
 /* ------------------------------------------------------------------ */
