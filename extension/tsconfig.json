@@ -1,0 +1,28 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "chrome",
+      "vite/client",
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@safari/shared": [
+        "../shared/src/index.ts"
+      ],
+      "@shared/*": [
+        "../shared/src/*"
+      ],
+      "@web/*": [
+        "../web/src/*"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "vite.config.ts",
+    "../shared/src",
+    "../web/src"
+  ]
+}

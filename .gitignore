@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+.npm/
+
+# build caches
+.vite/
+.turbo/
+.cache/
+
+# generated site build (rebuild with `npm run build:web`)
+web/release/
+
+# NOTE: extension/release/ is intentionally committed so the extension can be
+# loaded unpacked straight from a fresh clone (no toolchain required).
+
+# editors / os
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# smoke-test bundle
+.tmp/
