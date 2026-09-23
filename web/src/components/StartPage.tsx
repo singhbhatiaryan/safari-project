@@ -548,7 +548,12 @@ export function StartPage() {
         event.preventDefault();
         setMenu({ item: null, x: event.clientX, y: event.clientY });
       }}>
-        <div className="wallpaper" style={{ background: wallpaper.css }} aria-hidden />
+        <div
+          className="wallpaper"
+          // `background` shorthand resets background-color, so re-declare it after.
+          style={{ background: wallpaper.css, backgroundColor: '#101014' }}
+          aria-hidden
+        />
         <div className="wallpaper-dim" aria-hidden />
 
         <div className="startpage-content" onClick={(event) => {

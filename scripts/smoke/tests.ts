@@ -249,6 +249,19 @@ group('merge: two-way convergence between website and extension');
   check('remoteStale flag asks for a write-back', mergeStates(withLocal, remote).remoteStale === true);
 }
 
+group('first run: the website and the extension agree on seed content');
+{
+  const site = createDefaultState(true);
+  const extension = createDefaultState(true);
+  const merged = mergeStates(site, extension);
+  check('seeds do not duplicate on first handshake', merged.state.items.length === site.items.length, {
+    site: site.items.length,
+    merged: merged.state.items.length,
+  });
+  check('a clean handshake is a no-op', merged.changed === false);
+  check('seed folder survived the merge', childrenOf(merged.state.items, null).some((i) => i.type === 'folder'));
+}
+
 group('sanitize heals broken data');
 {
   const healed = sanitize({

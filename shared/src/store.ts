@@ -53,24 +53,37 @@ export interface SeedBookmark {
   favicon?: string;
 }
 
-const SEEDS: SeedBookmark[] = [
-  { title: 'Apple', url: 'https://www.apple.com' },
-  { title: 'iCloud', url: 'https://www.icloud.com' },
-  { title: 'Wikipedia', url: 'https://wikipedia.org' },
-  { title: 'Hacker News', url: 'https://news.ycombinator.com' },
-  { title: 'GitHub', url: 'https://github.com' },
-  { title: 'YouTube', url: 'https://youtube.com' },
+/**
+ * Seed content uses *stable* ids on purpose. The website and the extension each
+ * create their own defaults on first run; with random ids the first handshake
+ * would merge two different-looking copies and the user would see every seed
+ * twice. Stable ids make both sides describe the same items, so the merge
+ * collapses them instead.
+ */
+const SEED_FOLDER_ID = 'seed-folder-reading';
+const SEEDS: Array<SeedBookmark & { id: string }> = [
+  { id: 'seed-apple', title: 'Apple', url: 'https://www.apple.com' },
+  { id: 'seed-icloud', title: 'iCloud', url: 'https://www.icloud.com' },
+  { id: 'seed-wikipedia', title: 'Wikipedia', url: 'https://wikipedia.org' },
+  { id: 'seed-hackernews', title: 'Hacker News', url: 'https://news.ycombinator.com' },
+  { id: 'seed-github', title: 'GitHub', url: 'https://github.com' },
+  { id: 'seed-youtube', title: 'YouTube', url: 'https://youtube.com' },
+];
+const SEED_FOLDER_CHILDREN: Array<SeedBookmark & { id: string }> = [
+  { id: 'seed-alistapart', title: 'A List Apart', url: 'https://alistapart.com' },
+  { id: 'seed-mdn', title: 'MDN', url: 'https://developer.mozilla.org' },
 ];
 
 export function createDefaultState(seed = true): StoreState {
   const t = now();
   const items: Item[] = [];
   if (seed) {
-    SEEDS.forEach((s, i) => items.push(makeBookmark(s, null, i, t)));
+    SEEDS.forEach((bookmark, i) =>
+      items.push({ ...makeBookmark(bookmark, null, i, t), id: bookmark.id }),
+    );
     // A demo folder so the merge/ungroup behaviour is discoverable on day one.
-    const folderId = uid();
     items.push({
-      id: folderId,
+      id: SEED_FOLDER_ID,
       type: 'folder',
       parentId: null,
       title: 'Reading',
@@ -81,8 +94,9 @@ export function createDefaultState(seed = true): StoreState {
       updatedAt: t,
       deletedAt: null,
     });
-    items.push(makeBookmark({ title: 'A List Apart', url: 'https://alistapart.com' }, folderId, 0, t));
-    items.push(makeBookmark({ title: 'MDN', url: 'https://developer.mozilla.org' }, folderId, 1, t));
+    SEED_FOLDER_CHILDREN.forEach((bookmark, i) =>
+      items.push({ ...makeBookmark(bookmark, SEED_FOLDER_ID, i, t), id: bookmark.id }),
+    );
   }
   return {
     version: STORE_VERSION,

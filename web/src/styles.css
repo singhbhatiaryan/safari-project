@@ -162,6 +162,23 @@ body {
   text-shadow: 0 1px 2px rgba(255, 255, 255, 0.85);
 }
 
+/* Light wallpapers need dark ink everywhere labels sit directly on the surface. */
+.contrast-ink .reading-row .title,
+.contrast-ink .reading-row .host,
+.contrast-ink .section-title {
+  color: #0e1117;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.7);
+}
+
+.contrast-ink .tile-dashed {
+  border-color: rgba(14, 17, 23, 0.45);
+}
+
+.contrast-ink .tile-dashed .tile-glyph {
+  color: rgba(14, 17, 23, 0.7);
+  text-shadow: none;
+}
+
 /* ============================================================================
    Glass surfaces
    ========================================================================= */

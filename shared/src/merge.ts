@@ -61,9 +61,16 @@ export function mergeStates(local: StoreState, remote: StoreState): MergeResult 
   };
 }
 
+/**
+ * Canonical, order-insensitive fingerprint.
+ *
+ * Display order lives in `Item.order`, so the order of the `items` array itself is
+ * meaningless — comparing it would report "changed" for two identical stores and
+ * trigger an extra sync round-trip on every handshake.
+ */
 export function fingerprint(state: StoreState): string {
   return JSON.stringify({
-    i: state.items,
+    i: [...state.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
     s: state.settings,
   });
 }
